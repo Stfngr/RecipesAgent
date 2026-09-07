@@ -1,0 +1,30 @@
+[Unit]
+Description=Daily Recipe Telegram Bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=recipe-bot
+Group=recipe-bot
+WorkingDirectory=/opt/recipe-bot
+EnvironmentFile=/etc/recipe-bot/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/recipe-bot/.venv/bin/recipe-bot --settings /etc/recipe-bot/settings.json --env-file /etc/recipe-bot/.env --state /var/lib/recipe-bot/state.json
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=20
+StateDirectory=recipe-bot
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

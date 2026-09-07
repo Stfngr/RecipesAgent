@@ -1,0 +1,1 @@
+"""Daily recipe Telegram bot."""
