@@ -129,6 +129,19 @@ Application need not read that file itself. The service's persistent state
 directory is created and owned automatically by systemd. Application code and
 credentials stay read-only to the service user.
 
+Test Telegram delivery from the Pi without calling Spoonacular or starting the
+service scheduler:
+
+```bash
+/opt/recipe-bot/.venv/bin/recipe-bot \
+  --settings /etc/recipe-bot/settings.json \
+  --env-file /etc/recipe-bot/.env \
+  --send-test-message
+```
+
+The command sends one test message, does not create or read the state file, and
+exits.
+
 ```bash
 sudo systemctl start recipe-bot
 sudo systemctl stop recipe-bot
