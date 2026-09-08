@@ -54,6 +54,15 @@ Stop with Ctrl+C. Launching another process against the same state file fails
 with a lock error. Never run multiple instances with the same Telegram token,
 even if they use different state files.
 
+Test Telegram delivery without calling Spoonacular or starting the scheduler:
+
+```bash
+.venv/bin/recipe-bot --send-test-message
+```
+
+This sends `Recipe bot Telegram test successful.` to the configured chat and
+exits. It does not create or read the state file.
+
 Tests need no credentials and make no live API calls:
 
 ```bash

@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from recipe_bot.api import APIError, Spoonacular, Telegram
-from recipe_bot.config import Settings, load_config
+from recipe_bot.__main__ import TEST_MESSAGE, main, send_test_message
+from recipe_bot.config import Credentials, Settings, load_config
 from recipe_bot.recipes import Recipe, details, parse_selection, plain_text, split_message, summary
 from recipe_bot.service import RecipeService
 from recipe_bot.state import State, StateStore, week_key
@@ -245,6 +246,21 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class UnitTests(unittest.TestCase):
+    def test_cli_test_mode_sends_message_without_creating_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            credentials = Credentials("123:secret", -123, "secret-key")
+            with patch("recipe_bot.__main__.load_config", return_value=(Settings(), credentials)), \
+                 patch("recipe_bot.__main__.run_test_message", new_callable=AsyncMock) as send:
+                main(["--state", str(state_path), "--send-test-message"])
+            send.assert_awaited_once_with(credentials)
+            self.assertFalse(state_path.exists())
+
+    def test_test_message_content(self):
+        telegram = FakeTelegram()
+        asyncio.run(send_test_message(telegram))
+        self.assertEqual(telegram.messages, [TEST_MESSAGE])
+
     def test_config_validation(self):
         for kwargs in ({"recipes_per_day": 0}, {"recipes_per_day": True},
                        {"start_time": "8:00"}, {"active_window_minutes": 0},

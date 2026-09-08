@@ -12,6 +12,8 @@ from .config import load_config
 from .service import RecipeService
 from .state import StateStore
 
+TEST_MESSAGE = "Recipe bot Telegram test successful."
+
 
 async def run(settings, credentials, state_path):
     async with httpx.AsyncClient(timeout=20, limits=httpx.Limits(max_connections=4)) as client:
@@ -29,18 +31,33 @@ async def run(settings, credentials, state_path):
             logging.info("Service stopped")
 
 
-def main():
+async def send_test_message(telegram: Telegram):
+    await telegram.send(TEST_MESSAGE)
+
+
+async def run_test_message(credentials):
+    async with httpx.AsyncClient(timeout=20, limits=httpx.Limits(max_connections=4)) as client:
+        await send_test_message(Telegram(client, credentials.telegram_token, credentials.chat_id))
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Daily recipe Telegram bot")
     parser.add_argument("--settings", type=Path, default=Path("settings.json"))
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
     parser.add_argument("--state", type=Path, default=Path("state.json"))
-    args = parser.parse_args()
+    parser.add_argument("--send-test-message", action="store_true",
+                        help="send a Telegram test message and exit")
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     # HTTP libraries can include Telegram tokens in logged request URLs.
     logging.getLogger("httpx").setLevel(logging.CRITICAL)
     logging.getLogger("httpcore").setLevel(logging.CRITICAL)
     try:
         settings, credentials = load_config(args.settings, args.env_file)
+        if args.send_test_message:
+            asyncio.run(run_test_message(credentials))
+            logging.info("Telegram test message sent")
+            return
         args.state.parent.mkdir(parents=True, exist_ok=True)
         with args.state.with_name(args.state.name + ".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
