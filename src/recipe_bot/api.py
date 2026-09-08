@@ -1,5 +1,8 @@
+import asyncio
+from dataclasses import replace
 import httpx
 import math
+from lara_sdk import Translator
 
 from .recipes import Recipe
 
@@ -56,6 +59,38 @@ class Spoonacular:
         except (KeyError, ValueError, TypeError, AttributeError):
             raise APIError("Spoonacular recipe validation", retry_after=300) from None
         return recipes
+
+
+class Lara:
+    def __init__(self, access_key_id: str, access_key_secret: str, translator=None):
+        self.translator = translator or Translator(
+            access_key_id=access_key_id, access_key_secret=access_key_secret
+        )
+
+    async def translate_recipes(self, recipes: list[Recipe]) -> list[Recipe]:
+        return await asyncio.to_thread(self._translate_recipes, recipes)
+
+    def _translate_recipes(self, recipes: list[Recipe]) -> list[Recipe]:
+        translated = []
+        try:
+            for recipe in recipes:
+                values = [recipe.title, *recipe.ingredients, *recipe.instructions]
+                result = self.translator.translate(
+                    values, source="en-US", target="de-DE", content_type="text/plain", no_trace=True
+                )
+                values = result.translation
+                if not isinstance(values, list) or len(values) != 1 + len(recipe.ingredients) + len(recipe.instructions):
+                    raise ValueError("Invalid Lara translation")
+                if not all(isinstance(value, str) and value.strip() for value in values):
+                    raise ValueError("Invalid Lara translation")
+                ingredients_end = 1 + len(recipe.ingredients)
+                translated.append(replace(
+                    recipe, title=values[0], ingredients=values[1:ingredients_end],
+                    instructions=values[ingredients_end:],
+                ))
+        except Exception:
+            raise APIError("Lara", retry_after=300) from None
+        return translated
 
 
 class Telegram:

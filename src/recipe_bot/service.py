@@ -4,7 +4,7 @@ import logging
 import random
 import time
 
-from .api import APIError, Spoonacular, Telegram
+from .api import APIError, Lara, Spoonacular, Telegram
 from .config import Settings
 from .recipes import details, parse_selection, summary
 from .state import Session, StateStore, week_key
@@ -14,12 +14,13 @@ log = logging.getLogger(__name__)
 
 class RecipeService:
     def __init__(self, settings: Settings, store: StateStore, recipes: Spoonacular,
-                 telegram: Telegram, clock=time.time, rng=None):
+                 telegram: Telegram, translator: Lara | None = None, clock=time.time, rng=None):
         self.settings = settings
         self.store = store
         self.state = store.load()
         self.recipes = recipes
         self.telegram = telegram
+        self.translator = translator
         self.clock = clock
         self.rng = rng or random.Random()
         self.lock = asyncio.Lock()
@@ -65,6 +66,8 @@ class RecipeService:
         vegetarian_only = self.state.meat_recipes_chosen_this_week >= self.settings.meat_days_per_week
         try:
             recipes = await self.recipes.recipes(self.settings.recipes_per_day, vegetarian_only)
+            if self.translator:
+                recipes = await self.translator.translate_recipes(recipes)
         except APIError as error:
             self.state.fetch_retry_at = self.clock() + max(300, error.retry_after)
             if error.status in (401, 402, 403):

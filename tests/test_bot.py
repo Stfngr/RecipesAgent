@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from recipe_bot.api import APIError, Spoonacular, Telegram
+from recipe_bot.api import APIError, Lara, Spoonacular, Telegram
 from recipe_bot.__main__ import TEST_MESSAGE, main, send_test_message
 from recipe_bot.config import Credentials, Settings, load_config
 from recipe_bot.recipes import Recipe, details, parse_selection, plain_text, split_message, summary
@@ -50,6 +50,24 @@ class FakeRecipes:
         return [recipe(index + 1, vegetarian_only or index != 0) for index in range(count)]
 
 
+class FakeTranslator:
+    def __init__(self):
+        self.calls = []
+        self.fail = False
+
+    async def translate_recipes(self, recipes):
+        self.calls.append(recipes)
+        if self.fail:
+            raise APIError("Lara", retry_after=300)
+        return [Recipe(
+            item.id, f"Deutsch {item.title}", item.vegetarian,
+            [f"Deutsch {ingredient}" for ingredient in item.ingredients],
+            [f"Deutsch {instruction}" for instruction in item.instructions],
+            item.ready_minutes, item.prep_minutes, item.cooking_minutes, item.servings,
+            item.source_url, item.source_name, item.license,
+        ) for item in recipes]
+
+
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -84,6 +102,28 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("100 g rice", self.telegram.messages[-1])
         await self.service.tick()
         self.assertEqual(len(self.api.filters), 1)
+
+    async def test_lara_translation_is_persisted_before_announcement(self):
+        translator = FakeTranslator()
+        self.service = RecipeService(self.settings, self.store, self.api, self.telegram, translator,
+                                     clock=lambda: self.now, rng=random.Random(1))
+        await self.service.tick()
+        self.assertEqual(len(translator.calls), 1)
+        self.assertIn("Deutsch Recipe 1", self.telegram.messages[0])
+        await self.service.handle_update(self.update())
+        await self.service.tick()
+        self.assertIn("Deutsch 100 g rice", self.telegram.messages[-1])
+
+    async def test_lara_failure_creates_no_session(self):
+        translator = FakeTranslator()
+        translator.fail = True
+        self.service = RecipeService(self.settings, self.store, self.api, self.telegram, translator,
+                                     clock=lambda: self.now, rng=random.Random(1))
+        with self.assertRaises(APIError) as raised:
+            await self.service.tick()
+        self.assertEqual(str(raised.exception), "Lara request failed")
+        self.assertIsNone(self.service.state.session)
+        self.assertEqual(self.service.state.fetch_attempts, 1)
 
     async def test_filters_ignore_noise_and_stale_commands(self):
         await self.service.tick()
@@ -325,6 +365,24 @@ class UnitTests(unittest.TestCase):
                 _, credentials = load_config(path, Path(directory) / ".env")
             self.assertNotIn("secret", repr(credentials))
 
+    def test_lara_credentials_are_optional_but_must_be_a_pair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text("{}", encoding="utf-8")
+            values = {"TELEGRAM_BOT_TOKEN": "123:secret", "TELEGRAM_CHAT_ID": "-123",
+                      "SPOONACULAR_API_KEY": "spoon-key"}
+            with patch.dict("os.environ", values, clear=True):
+                _, credentials = load_config(path, Path(directory) / ".env")
+            self.assertIsNone(credentials.lara_access_key_id)
+            with patch.dict("os.environ", {**values, "LARA_ACCESS_KEY_ID": "lara-id"}, clear=True):
+                with self.assertRaises(ValueError):
+                    load_config(path, Path(directory) / ".env")
+            with patch.dict("os.environ", {**values, "LARA_ACCESS_KEY_ID": "lara-id",
+                                            "LARA_ACCESS_KEY_SECRET": "lara-secret"}, clear=True):
+                _, credentials = load_config(path, Path(directory) / ".env")
+            self.assertEqual(credentials.lara_access_key_id, "lara-id")
+            self.assertNotIn("lara-secret", repr(credentials))
+
 
 class APITests(unittest.IsolatedAsyncioTestCase):
     def response_recipe(self, vegetarian=True):
@@ -372,6 +430,28 @@ class APITests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(APIError) as raised:
                 await Telegram(client, "secret", -123).send("test")
         self.assertNotIn("secret", str(raised.exception))
+
+    async def test_lara_translates_recipe_content(self):
+        class Translator:
+            def translate(self, values, **kwargs):
+                if kwargs != {"source": "en-US", "target": "de-DE", "content_type": "text/plain",
+                              "no_trace": True}:
+                    raise AssertionError("Unexpected Lara translation request")
+                return type("Result", (), {"translation": [f"Deutsch {value}" for value in values]})()
+
+        translated = await Lara("id", "secret", Translator()).translate_recipes([recipe()])
+        self.assertEqual(translated[0].title, "Deutsch Recipe 1")
+        self.assertEqual(translated[0].ingredients, ["Deutsch 100 g rice"])
+        self.assertEqual(translated[0].instructions, ["Deutsch Cook rice."])
+
+    async def test_lara_rejects_invalid_or_failed_translations(self):
+        class Translator:
+            def translate(self, values, **kwargs):
+                return type("Result", (), {"translation": ["only one value"]})()
+
+        with self.assertRaises(APIError) as raised:
+            await Lara("id", "secret", Translator()).translate_recipes([recipe()])
+        self.assertEqual(str(raised.exception), "Lara request failed")
 
 
 if __name__ == "__main__":

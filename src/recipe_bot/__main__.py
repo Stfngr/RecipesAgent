@@ -7,7 +7,7 @@ import signal
 
 import httpx
 
-from .api import Spoonacular, Telegram
+from .api import Lara, Spoonacular, Telegram
 from .config import load_config
 from .service import RecipeService
 from .state import StateStore
@@ -17,9 +17,13 @@ TEST_MESSAGE = "Recipe bot Telegram test successful."
 
 async def run(settings, credentials, state_path):
     async with httpx.AsyncClient(timeout=20, limits=httpx.Limits(max_connections=4)) as client:
+        translator = None
+        if credentials.lara_access_key_id:
+            translator = Lara(credentials.lara_access_key_id, credentials.lara_access_key_secret)
         service = RecipeService(
             settings, StateStore(state_path), Spoonacular(client, credentials.spoonacular_key),
             Telegram(client, credentials.telegram_token, credentials.chat_id),
+            translator,
         )
         task = asyncio.create_task(service.run())
         loop = asyncio.get_running_loop()

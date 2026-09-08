@@ -59,10 +59,13 @@ class Credentials:
     telegram_token: str = field(repr=False)
     chat_id: int
     spoonacular_key: str = field(repr=False)
+    lara_access_key_id: str | None = field(default=None, repr=False)
+    lara_access_key_secret: str | None = field(default=None, repr=False)
 
 
 def load_config(settings_path: Path, env_path: Path) -> tuple[Settings, Credentials]:
     names = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SPOONACULAR_API_KEY")
+    lara_names = ("LARA_ACCESS_KEY_ID", "LARA_ACCESS_KEY_SECRET")
     if not all(os.environ.get(name) for name in names):
         load_dotenv(env_path)
     with settings_path.open(encoding="utf-8") as file:
@@ -76,4 +79,7 @@ def load_config(settings_path: Path, env_path: Path) -> tuple[Settings, Credenti
         raise ValueError("Invalid TELEGRAM_BOT_TOKEN format")
     if not re.fullmatch(r"-?[0-9]+", chat_id) or int(chat_id) == 0:
         raise ValueError("TELEGRAM_CHAT_ID must be a nonzero numeric chat ID")
-    return settings, Credentials(token, int(chat_id), key)
+    lara_id, lara_secret = (os.environ.get(name, "").strip() or None for name in lara_names)
+    if bool(lara_id) != bool(lara_secret):
+        raise ValueError("Set both LARA_ACCESS_KEY_ID and LARA_ACCESS_KEY_SECRET, or neither")
+    return settings, Credentials(token, int(chat_id), key, lara_id, lara_secret)
