@@ -107,12 +107,12 @@ Install OS packages (these commands require administrator access):
 
 ```bash
 sudo apt update
-sudo apt install python3 python3-venv tzdata
+sudo apt install git python3 python3-venv tzdata
 sudo useradd --system --user-group --home-dir /var/lib/recipe-bot --no-create-home recipe-bot
-sudo install -d -m 755 /opt/recipe-bot
+sudo git clone https://github.com/Stfngr/RecipesAgent.git /opt/recipe-bot
 sudo install -d -m 700 /etc/recipe-bot
 sudo python3 -m venv /opt/recipe-bot/.venv
-sudo /opt/recipe-bot/.venv/bin/pip install .
+sudo /opt/recipe-bot/.venv/bin/pip install /opt/recipe-bot
 sudo install -m 600 .env.example /etc/recipe-bot/.env
 sudo install -m 600 settings.json.example /etc/recipe-bot/settings.json
 sudo chown recipe-bot:recipe-bot /etc/recipe-bot/settings.json
@@ -141,6 +141,17 @@ service scheduler:
 
 The command sends one test message, does not create or read the state file, and
 exits.
+
+Update application code with the service stopped:
+
+```bash
+sudo systemctl stop recipe-bot
+sudo git -C /opt/recipe-bot pull --ff-only
+sudo /opt/recipe-bot/.venv/bin/pip install /opt/recipe-bot
+sudo systemctl restart recipe-bot
+```
+
+`--ff-only` prevents the Pi from creating an accidental merge commit.
 
 ```bash
 sudo systemctl start recipe-bot
