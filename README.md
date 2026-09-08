@@ -113,13 +113,13 @@ sudo git clone https://github.com/Stfngr/RecipesAgent.git /opt/recipe-bot
 sudo install -d -m 700 /etc/recipe-bot
 sudo python3 -m venv /opt/recipe-bot/.venv
 sudo /opt/recipe-bot/.venv/bin/pip install /opt/recipe-bot
-sudo install -m 600 .env.example /etc/recipe-bot/.env
-sudo install -m 600 settings.json.example /etc/recipe-bot/settings.json
+sudo install -m 600 /opt/recipe-bot/.env.example /etc/recipe-bot/.env
+sudo install -m 600 /opt/recipe-bot/settings.json.example /etc/recipe-bot/settings.json
 sudo chown recipe-bot:recipe-bot /etc/recipe-bot/settings.json
 sudo chmod 755 /etc/recipe-bot
 sudoedit /etc/recipe-bot/.env
 sudoedit /etc/recipe-bot/settings.json
-sudo install -m 644 systemd/recipe-bot.service /etc/systemd/system/recipe-bot.service
+sudo install -m 644 /opt/recipe-bot/systemd/recipe-bot.service /etc/systemd/system/recipe-bot.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now recipe-bot
 ```
