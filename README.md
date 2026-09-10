@@ -1,8 +1,8 @@
 # Daily Recipe Telegram Bot
 
 One lightweight Python process, supervised by systemd. An internal asyncio scheduler
-starts a daily menu; Telegram long polling accepts the first valid selection during
-the active window. No cron, inbound port, webhook server, or LLM needed.
+starts a daily menu; Telegram long polling runs only during its active selection
+window. No cron, inbound port, webhook server, or LLM needed.
 
 ## Behavior
 
@@ -198,6 +198,9 @@ message, but before local acknowledgement, can duplicate that message on retry.
 Logical selections and counters are idempotent; Telegram delivery is at-least-once.
 
 Network errors retry with delay; Telegram rate limits honor `retry_after`.
+Failed Spoonacular requests and Lara translations send a safe Telegram alert with
+the service, optional HTTP/API status, and retry outcome. If Telegram itself is
+unavailable, the alert failure is logged and does not replace the original retry.
 At most **three paid recipe fetch attempts per local day**, persisted across
 restarts, with at least five minutes between failed attempts. Auth/quota errors
 stop recipe fetches for that date. Incomplete batches (including missing

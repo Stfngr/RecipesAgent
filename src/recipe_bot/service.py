@@ -73,6 +73,7 @@ class RecipeService:
             if error.status in (401, 402, 403):
                 self.state.fetch_attempts = 3
             self.store.save(self.state)
+            await self.notify_fetch_failure(error)
             if self.state.fetch_attempts == 3:
                 log.error("Daily recipe request budget exhausted; skipping today")
             raise
@@ -94,6 +95,17 @@ class RecipeService:
         self.state.dessert_days_used_this_week += int(dessert)
         self.store.save(self.state)
         log.info("Daily session created: %s", self.state.session.day)
+
+    async def notify_fetch_failure(self, error: APIError):
+        exhausted = self.state.fetch_attempts == 3
+        if self.settings.interaction_language == "de":
+            outcome = "Keine weiteren Versuche heute." if exhausted else "Neuer Versuch in mindestens 5 Minuten."
+        else:
+            outcome = "No more attempts today." if exhausted else "Retrying in at least 5 minutes."
+        try:
+            await self.telegram.send(f"{error}. {outcome}")
+        except APIError as notification_error:
+            log.warning("Could not send recipe failure alert: %s", notification_error)
 
     async def deliver(self):
         session = self.state.session
@@ -161,6 +173,11 @@ class RecipeService:
     async def listen(self):
         offset = None
         while True:
+            session = self.state.session
+            if session is None or session.phase != "active":
+                # Poll only while a menu can accept a selection.
+                await asyncio.sleep(1)
+                continue
             try:
                 updates = await self.telegram.updates(offset)
                 for update in updates:

@@ -124,6 +124,33 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(raised.exception), "Lara request failed")
         self.assertIsNone(self.service.state.session)
         self.assertEqual(self.service.state.fetch_attempts, 1)
+        self.assertEqual(self.telegram.messages, [
+            "Lara request failed. Neuer Versuch in mindestens 5 Minuten."
+        ])
+
+    async def test_recipe_failure_sends_safe_retry_alert(self):
+        self.api.fail = APIError("Spoonacular", 500)
+        with self.assertRaises(APIError):
+            await self.service.tick()
+        self.assertEqual(self.telegram.messages, [
+            "Spoonacular request failed (HTTP/API 500). Neuer Versuch in mindestens 5 Minuten."
+        ])
+
+    async def test_exhausted_recipe_budget_sends_final_alert(self):
+        self.api.fail = APIError("Spoonacular", 402)
+        with self.assertRaises(APIError):
+            await self.service.tick()
+        self.assertEqual(self.telegram.messages, [
+            "Spoonacular request failed (HTTP/API 402). Keine weiteren Versuche heute."
+        ])
+
+    async def test_alert_failure_does_not_replace_recipe_failure(self):
+        self.api.fail = APIError("Spoonacular", 500)
+        self.telegram.fail = True
+        with self.assertRaisesRegex(APIError, "Spoonacular request failed"):
+            await self.service.tick()
+        self.assertIsNone(self.service.state.session)
+        self.assertEqual(self.service.state.fetch_attempts, 1)
 
     async def test_filters_ignore_noise_and_stale_commands(self):
         await self.service.tick()
@@ -283,6 +310,14 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             await self.service.run()
         sleep.assert_awaited_once_with(90)
         self.assertEqual(self.telegram.call.await_count, 2)
+
+    async def test_listener_does_not_poll_outside_selection_window(self):
+        self.telegram.updates = AsyncMock()
+        with patch("recipe_bot.service.asyncio.sleep", new_callable=AsyncMock,
+                   side_effect=asyncio.CancelledError):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.service.listen()
+        self.telegram.updates.assert_not_awaited()
 
 
 class UnitTests(unittest.TestCase):
