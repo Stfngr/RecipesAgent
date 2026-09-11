@@ -128,6 +128,7 @@ Tracks weekly limits and reset timers across restarts:
 * If a valid input (`!bot <number>`) is received from any user in the chat:
   1. Lock selection to `<number>`.
   2. Transition to Stage 3 immediately.
+* A valid `!bot 0` skips today's meal. The bot sends a confirmation message and remains inactive until the next day's `start_time`.
 
 ### 5.3 Stage 3: Fallback & Final Resolution
 * **Timeout Fallback:** If `active_window_minutes` elapses without a valid trigger command, the bot logs a timeout event and selects a recipe uniformly at random from the day's candidate list.

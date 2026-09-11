@@ -7,8 +7,9 @@ window. No cron, inbound port, webhook server, or LLM needed.
 ## Behavior
 
 - Five random main-course recipes at 08:00 Europe/Berlin by default.
-- Select using `!bot 2` in the configured chat. Other chats, bot messages, edited
-  messages, chatter, malformed numbers, and inactive-window messages are ignored.
+- Select using `!bot 2`, or skip today's meal with `!bot 0`, in the configured
+  chat. Other chats, bot messages, edited messages, chatter, malformed numbers,
+  and inactive-window messages are ignored.
 - First valid selection wins; expiry selects uniformly at random.
 - Configure fixed vegetarian weekdays such as Monday and Friday. On those days,
   only vegetarian recipes are requested and every returned vegetarian flag is

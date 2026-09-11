@@ -42,7 +42,7 @@ class Session:
             raise ValueError("Invalid session trigger")
         if type(self.window_minutes) is not int or not 1 <= self.window_minutes <= 1439:
             raise ValueError("Invalid session window")
-        if self.phase not in ("announcing", "active", "delivering", "done"):
+        if self.phase not in ("announcing", "active", "delivering", "skipping", "done", "skipped"):
             raise ValueError("Invalid session phase")
         if not isinstance(self.outbox, list) or not self.outbox or not all(
             isinstance(message, str) and 0 < len(message) <= 2000 for message in self.outbox

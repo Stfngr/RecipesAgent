@@ -109,8 +109,10 @@ def summary(recipes: list[Recipe], dessert: bool, language: str, trigger: str, m
     status = ("JA" if dessert else "NEIN") if de else ("YES" if dessert else "NO")
     dessert_label = "Dessert heute" if de else "Dessert today"
     hint = (
-        f"Auswahl: {trigger} <Nummer> (aktiv fuer {minutes} Minuten)"
-        if de else f"Select: {trigger} <number> (active for {minutes} minutes)"
+        f"Auswahl: {trigger} <Nummer>; {trigger} 0 fuer keine Auswahl "
+        f"(aktiv fuer {minutes} Minuten)"
+        if de else f"Select: {trigger} <number>; {trigger} 0 for no selection "
+        f"(active for {minutes} minutes)"
     )
     titles = [f"{index}. {' '.join(recipe.title.split())}" for index, recipe in enumerate(recipes, 1)]
     return split_message("\n".join([heading, *titles, "", f"{dessert_label}: {status}", "", hint]))
@@ -143,8 +145,17 @@ def details(recipe: Recipe, language: str, automatic: bool) -> list[str]:
     return split_message("\n".join(lines))
 
 
+def skipped(language: str) -> list[str]:
+    return ["Keine Auswahl fuer heute. Bis morgen." if language == "de"
+            else "No selection for today. See you tomorrow."]
+
+
 def parse_selection(text: str, trigger: str, count: int) -> int | None:
     match = re.fullmatch(re.escape(trigger) + r"\s+([0-9]{1,3})\s*", text)
     if match and 1 <= int(match[1]) <= count:
         return int(match[1]) - 1
     return None
+
+
+def is_skip_command(text: str, trigger: str) -> bool:
+    return text == f"{trigger} 0"

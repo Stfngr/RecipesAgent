@@ -13,7 +13,7 @@ import httpx
 from recipe_bot.api import APIError, Lara, Spoonacular, Telegram
 from recipe_bot.__main__ import TEST_MESSAGE, main, send_test_message
 from recipe_bot.config import Credentials, Settings, load_config
-from recipe_bot.recipes import Recipe, details, parse_selection, plain_text, split_message, summary
+from recipe_bot.recipes import Recipe, details, is_skip_command, parse_selection, plain_text, skipped, split_message, summary
 from recipe_bot.service import RecipeService
 from recipe_bot.state import State, StateStore, week_key
 
@@ -153,11 +153,36 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_filters_ignore_noise_and_stale_commands(self):
         await self.service.tick()
-        for update in (self.update("chat"), self.update("!bot 0"), self.update("!bot 3"),
+        for update in (self.update("chat"), self.update("!bot 00"), self.update("!bot 0 extra"),
+                       self.update("!bot 3"),
                        self.update("!bot 1 extra"), self.update("!bot 1", chat=456),
                        self.update(sent_at=self.now - 60), {"edited_message": self.update()["message"]}):
             await self.service.handle_update(update)
         self.assertEqual(self.service.state.session.phase, "active")
+
+    async def test_skip_command_ends_today_without_recipe(self):
+        await self.service.tick()
+        await self.service.handle_update(self.update("!bot 0"))
+        self.assertEqual(self.service.state.session.phase, "skipping")
+        self.assertIsNone(self.service.state.session.selected_index)
+        await self.service.tick()
+        self.assertEqual(self.service.state.session.phase, "skipped")
+        self.assertEqual(self.telegram.messages[-1], "Keine Auswahl fuer heute. Bis morgen.")
+        self.assertEqual(len(self.api.filters), 1)
+        await self.service.tick()
+        self.assertEqual(len(self.api.filters), 1)
+
+    async def test_failed_skip_delivery_recovers_after_restart(self):
+        await self.service.tick()
+        await self.service.handle_update(self.update("!bot 0"))
+        self.telegram.fail = True
+        with self.assertRaises(APIError):
+            await self.service.tick()
+        self.service = self.build()
+        self.telegram.fail = False
+        await self.service.tick()
+        self.assertEqual(self.service.state.session.phase, "skipped")
+        self.assertEqual(self.telegram.messages[-1], "Keine Auswahl fuer heute. Bis morgen.")
 
     async def test_first_selection_wins(self):
         await self.service.tick()
@@ -399,12 +424,17 @@ class UnitTests(unittest.TestCase):
         self.assertEqual("".join(chunks), "\U0001f600" * 5000)
         self.assertTrue(all(len(part.encode("utf-16-le")) // 2 <= 4096 for part in chunks))
         self.assertIn("Dessert today: NO", summary([recipe()], False, "en", "!bot", 60)[0])
+        self.assertIn("!bot 0", summary([recipe()], False, "en", "!bot", 60)[0])
         self.assertIn("Ingredients:", details(recipe(), "en", False)[0])
+        self.assertEqual(skipped("en"), ["No selection for today. See you tomorrow."])
 
     def test_parser_literal_trigger(self):
         self.assertEqual(parse_selection("!b.t 2", "!b.t", 2), 1)
         for text in ("!bat 2", " !b.t 2", "!b.t 0", "!b.t -1", "!b.t 2more", "!b.t 9999"):
             self.assertIsNone(parse_selection(text, "!b.t", 2))
+        self.assertTrue(is_skip_command("!b.t 0", "!b.t"))
+        for text in ("!b.t 00", "!b.t 0 ", "!b.t 0 extra", "!bat 0"):
+            self.assertFalse(is_skip_command(text, "!b.t"))
 
     def test_credentials_not_in_repr(self):
         with tempfile.TemporaryDirectory() as directory:

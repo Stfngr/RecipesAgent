@@ -6,7 +6,7 @@ import time
 
 from .api import APIError, Lara, Spoonacular, Telegram
 from .config import Settings, WEEKDAYS
-from .recipes import details, parse_selection, summary
+from .recipes import details, is_skip_command, parse_selection, skipped, summary
 from .state import Session, StateStore
 
 log = logging.getLogger(__name__)
@@ -42,10 +42,10 @@ class RecipeService:
             session = self.state.session
             if session and session.phase == "active" and self.clock() >= session.deadline:
                 self.resolve(self.rng.randrange(len(session.recipes)), automatic=True)
-            if session and session.phase in ("announcing", "delivering"):
+            if session and session.phase in ("announcing", "delivering", "skipping"):
                 await self.deliver()
             now = self.local_now()
-            if (self.state.session is None or self.state.session.phase == "done") and (
+            if (self.state.session is None or self.state.session.phase in ("done", "skipped")) and (
                 self.state.session is None or self.state.session.day < now.date().isoformat()
             ) and now.time() >= self.settings.start:
                 await self.create_session()
@@ -109,7 +109,7 @@ class RecipeService:
 
     async def deliver(self):
         session = self.state.session
-        if session is None or session.phase not in ("announcing", "delivering"):
+        if session is None or session.phase not in ("announcing", "delivering", "skipping"):
             return
         while session.next_message < len(session.outbox):
             await self.telegram.send(session.outbox[session.next_message])
@@ -121,8 +121,8 @@ class RecipeService:
             session.phase = "active"
             log.info("Selection window active")
         else:
-            session.phase = "done"
-            log.info("Recipe delivered; session inactive")
+            session.phase = "done" if session.phase == "delivering" else "skipped"
+            log.info("%s; session inactive", "Recipe delivered" if session.phase == "done" else "Selection skipped")
         self.store.save(self.state)
 
     def resolve(self, index: int, automatic: bool):
@@ -134,6 +134,14 @@ class RecipeService:
         session.next_message = 0
         self.store.save(self.state)
         log.info("%s selection: recipe %s", "Timeout" if automatic else "User", recipe.id)
+
+    def skip(self):
+        session = self.state.session
+        session.phase = "skipping"
+        session.outbox = skipped(session.language)
+        session.next_message = 0
+        self.store.save(self.state)
+        log.info("User skipped selection")
 
     async def handle_update(self, update: dict):
         message = update.get("message", {})
@@ -153,6 +161,9 @@ class RecipeService:
             # Telegram dates have one-second precision. Reject queued commands from older sessions.
             sent_at = message.get("date", 0)
             if not int(session.opened_at) <= sent_at < session.deadline:
+                return
+            if is_skip_command(text, session.trigger):
+                self.skip()
                 return
             index = parse_selection(text, session.trigger, len(session.recipes))
             if index is not None:
