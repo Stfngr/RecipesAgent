@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -17,7 +19,7 @@ class Settings:
     active_window_minutes: int = 60
     language: str = "en"
     trigger_codeword: str = "!bot"
-    meat_days_per_week: int = 3
+    vegetarian_days: tuple[str, ...] = ()
     dessert_days_per_week: int = 2
     interaction_language: str = "de"
 
@@ -25,12 +27,18 @@ class Settings:
         for name, low, high in (
             ("recipes_per_day", 1, 100),
             ("active_window_minutes", 1, 1439),
-            ("meat_days_per_week", 0, 7),
             ("dessert_days_per_week", 0, 7),
         ):
             value = getattr(self, name)
             if type(value) is not int or not low <= value <= high:
                 raise ValueError(f"{name} must be an integer between {low} and {high}")
+        if not isinstance(self.vegetarian_days, (list, tuple)) or any(
+            not isinstance(day, str) or day not in WEEKDAYS for day in self.vegetarian_days
+        ):
+            raise ValueError("vegetarian_days must contain lowercase weekday names")
+        if len(set(self.vegetarian_days)) != len(self.vegetarian_days):
+            raise ValueError("vegetarian_days must not contain duplicates")
+        object.__setattr__(self, "vegetarian_days", tuple(self.vegetarian_days))
         if not isinstance(self.start_time, str) or not re.fullmatch(
             r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", self.start_time
         ):

@@ -66,22 +66,20 @@ class Session:
 @dataclass
 class State:
     week: str = ""
-    meat_recipes_chosen_this_week: int = 0
     dessert_days_used_this_week: int = 0
     session: Session | None = None
     fetch_day: str = ""
     fetch_attempts: int = 0
     fetch_retry_at: float = 0
-    version: int = field(default=1)
+    version: int = field(default=2)
 
     def __post_init__(self):
-        if self.version != 1:
+        if self.version != 2:
             raise ValueError("Unsupported state version")
         if self.week and not re.fullmatch(r"[0-9]{4}-W[0-9]{2}", self.week):
             raise ValueError("Invalid state week")
-        for counter in (self.meat_recipes_chosen_this_week, self.dessert_days_used_this_week):
-            if type(counter) is not int or not 0 <= counter <= 7:
-                raise ValueError("Invalid weekly counter")
+        if type(self.dessert_days_used_this_week) is not int or not 0 <= self.dessert_days_used_this_week <= 7:
+            raise ValueError("Invalid weekly counter")
         if self.fetch_day:
             date.fromisoformat(self.fetch_day)
         if type(self.fetch_attempts) is not int or not 0 <= self.fetch_attempts <= 3:
@@ -94,7 +92,6 @@ class State:
         if self.week == week:
             return False
         self.week = week
-        self.meat_recipes_chosen_this_week = 0
         self.dessert_days_used_this_week = 0
         return True
 
@@ -108,7 +105,17 @@ class StateStore:
             return State()
         with self.path.open(encoding="utf-8") as file:
             data = json.load(file)
-        if not isinstance(data, dict) or set(data) != {item.name for item in fields(State)}:
+        if not isinstance(data, dict):
+            raise ValueError("Incomplete or unsupported state file")
+        legacy_fields = {item.name for item in fields(State)} | {"meat_recipes_chosen_this_week"}
+        migrated = data.get("version") == 1 and set(data) == legacy_fields
+        if migrated:
+            meat_counter = data["meat_recipes_chosen_this_week"]
+            if type(meat_counter) is not int or not 0 <= meat_counter <= 7:
+                raise ValueError("Invalid weekly counter")
+            data.pop("meat_recipes_chosen_this_week")
+            data["version"] = 2
+        if set(data) != {item.name for item in fields(State)}:
             raise ValueError("Incomplete or unsupported state file")
         if data.get("session") is not None:
             session = data["session"]
@@ -116,7 +123,10 @@ class StateStore:
                 raise ValueError("Incomplete or unsupported session")
             session["recipes"] = [Recipe(**recipe) for recipe in session["recipes"]]
             data["session"] = Session(**session)
-        return State(**data)
+        state = State(**data)
+        if migrated:
+            self.save(state)
+        return state
 
     def save(self, state: State) -> None:
         temporary = None

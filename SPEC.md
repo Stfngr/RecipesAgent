@@ -1,7 +1,7 @@
 # SPEC.md: Automated Daily Recipe Telegram Bot
 
 ## 1. Executive Summary
-The goal of this project is to build an autonomous, resource-efficient Telegram bot running on a Raspberry Pi 3 Model B. The bot fetches daily recipe suggestions from the Spoonacular API based on predefined weekly constraints (meat limits, dessert frequency), presents a summary list to a Telegram chat along with a simple **YES/NO** indicator for dessert, listens for a user selection using a specific activation trigger/codeword, and falls back to an automatic selection if a timeout occurs.
+The goal of this project is to build an autonomous, resource-efficient Telegram bot running on a Raspberry Pi 3 Model B. The bot fetches daily recipe suggestions from the Spoonacular API based on predefined weekly constraints (fixed vegetarian weekdays, dessert frequency), presents a summary list to a Telegram chat along with a simple **YES/NO** indicator for dessert, listens for a user selection using a specific activation trigger/codeword, and falls back to an automatic selection if a timeout occurs.
 
 ---
 
@@ -38,7 +38,7 @@ Stores application parameters that govern business logic:
   "active_window_minutes": 60,
   "language": "de",
   "trigger_codeword": "!bot",
-  "meat_days_per_week": 3,
+  "vegetarian_days": ["monday", "friday"],
   "dessert_days_per_week": 2,
   "interaction_language": "de"
 }
@@ -49,7 +49,6 @@ Tracks weekly limits and reset timers across restarts:
 ```json
 {
   "current_week_number": 36,
-  "meat_recipes_chosen_this_week": 0,
   "dessert_days_used_this_week": 0
 }
 ```
@@ -59,11 +58,11 @@ Tracks weekly limits and reset timers across restarts:
 ## 4. Business Logic & Weekly Rules
 
 ### 4.1 State Reset
-* Every Monday at 00:00, the system resets `meat_recipes_chosen_this_week` and `dessert_days_used_this_week` to `0`.
+* Every Monday at 00:00, the system resets `dessert_days_used_this_week` to `0`.
 
 ### 4.2 Meat Constraint Logic
-* If `meat_recipes_chosen_this_week` reaches `meat_days_per_week`, the Spoonacular query filter must strictly append `tags=vegetarian` to force 100% vegetarian suggestions for the remaining days of that week.
-* If a selected recipe contains meat, increment `meat_recipes_chosen_this_week` upon final selection.
+* `vegetarian_days` contains lowercase weekday names. For a configured day, the Spoonacular query filter must strictly append `tags=vegetarian` to force 100% vegetarian suggestions.
+* Each returned recipe on a configured vegetarian day must have `vegetarian: true`. Fish and seafood are not vegetarian.
 
 ### 4.3 Dessert Indicator Logic (YES / NO)
 * The bot evaluates whether dessert is available today based on remaining allowed days:
@@ -111,7 +110,7 @@ Tracks weekly limits and reset timers across restarts:
 
 ### 5.1 Stage 1: Scheduled Trigger
 1. At `start_time` (e.g., 08:00), the bot initializes a new selection session.
-2. Evaluates meat and dessert constraints for the current day.
+2. Evaluates fixed vegetarian-day and dessert constraints for the current day.
 3. Calls Spoonacular API (`/recipes/random`) fetching `recipes_per_day` items in German (`language=de`).
 4. Format and post the summary list to Telegram:
    > 🤖 **Heutige Rezeptauswahl:**
@@ -133,7 +132,6 @@ Tracks weekly limits and reset timers across restarts:
 ### 5.3 Stage 3: Fallback & Final Resolution
 * **Timeout Fallback:** If `active_window_minutes` elapses without a valid trigger command, the bot logs a timeout event and selects a recipe uniformly at random from the day's candidate list.
 * The bot posts the full recipe details (ingredients, prep time, step-by-step instructions) to the channel.
-* If a meat recipe was selected, update `meat_recipes_chosen_this_week`.
 * The bot enters an **INACTIVE** state until the next day's `start_time`.
 
 ---
@@ -146,7 +144,7 @@ Tracks weekly limits and reset timers across restarts:
   * `apiKey`: `{SPOONACULAR_API_KEY}`
   * `number`: `{recipes_per_day}`
   * `language`: `de`
-  * `tags`: `vegetarian` (conditionally appended based on state)
+  * `tags`: `vegetarian` (conditionally appended for configured vegetarian weekdays)
 
 ---
 

@@ -5,9 +5,9 @@ import random
 import time
 
 from .api import APIError, Lara, Spoonacular, Telegram
-from .config import Settings
+from .config import Settings, WEEKDAYS
 from .recipes import details, parse_selection, summary
-from .state import Session, StateStore, week_key
+from .state import Session, StateStore
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class RecipeService:
         self.state.fetch_attempts += 1
         self.state.fetch_retry_at = self.clock() + 300
         self.store.save(self.state)
-        vegetarian_only = self.state.meat_recipes_chosen_this_week >= self.settings.meat_days_per_week
+        vegetarian_only = WEEKDAYS[date.fromisoformat(day).weekday()] in self.settings.vegetarian_days
         try:
             recipes = await self.recipes.recipes(self.settings.recipes_per_day, vegetarian_only)
             if self.translator:
@@ -132,9 +132,6 @@ class RecipeService:
         session.phase = "delivering"
         session.outbox = details(recipe, session.language, automatic)
         session.next_message = 0
-        # Quotas belong to the menu date, not the eventual delivery/recovery date.
-        if not recipe.vegetarian and week_key(date.fromisoformat(session.day)) == self.state.week:
-            self.state.meat_recipes_chosen_this_week += 1
         self.store.save(self.state)
         log.info("%s selection: recipe %s", "Timeout" if automatic else "User", recipe.id)
 

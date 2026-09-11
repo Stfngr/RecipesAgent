@@ -10,12 +10,12 @@ window. No cron, inbound port, webhook server, or LLM needed.
 - Select using `!bot 2` in the configured chat. Other chats, bot messages, edited
   messages, chatter, malformed numbers, and inactive-window messages are ignored.
 - First valid selection wins; expiry selects uniformly at random.
-- Seafood and fish count as meat: every recipe with `vegetarian: false` consumes
-  one meat day. At the limit, query vegetarian recipes and verify every result's
-  vegetarian flag. Unknown classification is rejected, never treated as safe.
+- Configure fixed vegetarian weekdays such as Monday and Friday. On those days,
+  only vegetarian recipes are requested and every returned vegetarian flag is
+  verified. Seafood and fish are not vegetarian. Unknown classification is rejected.
 - Dessert is only `JA/NEIN` (or `YES/NO`), not a separate recipe. Probability is
   unused dessert days / remaining days, with forced use near week's end.
-- Counters use ISO year and week and reset Monday in the configured timezone.
+- Dessert counters use ISO year and week and reset Monday in the configured timezone.
   Downtime and New Year are handled on startup. Counts belong to the menu date.
 - Recipe titles, ingredients, and instructions remain **English** unless optional
   Lara Translate credentials are configured. Bot messages support German and English
@@ -79,7 +79,8 @@ Tests need no credentials and make no live API calls:
 ## Configuration
 
 See `settings.json.example`. Limits: 1-100 recipes, 1-1439 active minutes,
-0-7 meat/dessert days, `HH:MM` start time, IANA timezone such as `Europe/Berlin`.
+0-7 dessert days, `vegetarian_days` list of lowercase weekday names such as
+`["monday", "friday"]`, `HH:MM` start time, IANA timezone such as `Europe/Berlin`.
 `language` must be `en`; `interaction_language` can be `de` or `en`.
 `trigger_codeword` is case-sensitive, without whitespace, up to 32 characters.
 Restart after changing settings. Existing sessions retain their original trigger,

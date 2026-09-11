@@ -5,7 +5,7 @@
   "active_window_minutes": 60,
   "language": "en",
   "trigger_codeword": "!bot",
-  "meat_days_per_week": 3,
+  "vegetarian_days": ["monday", "friday"],
   "dessert_days_per_week": 2,
   "interaction_language": "de"
 }

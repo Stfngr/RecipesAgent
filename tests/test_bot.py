@@ -96,7 +96,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Dessert heute: JA", self.telegram.messages[0])
         self.assertEqual(self.service.state.session.phase, "active")
         await self.service.handle_update(self.update())
-        self.assertEqual(self.service.state.meat_recipes_chosen_this_week, 1)
         await self.service.tick()
         self.assertEqual(self.service.state.session.phase, "done")
         self.assertIn("100 g rice", self.telegram.messages[-1])
@@ -165,7 +164,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(self.service.handle_update(self.update()),
                              self.service.handle_update(self.update("!bot 2")))
         self.assertEqual(self.service.state.session.selected_index, 0)
-        self.assertEqual(self.service.state.meat_recipes_chosen_this_week, 1)
 
     async def test_timeout_at_deadline_and_restart(self):
         await self.service.tick()
@@ -188,15 +186,15 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.state.session.phase, "delivering")
         self.assertIn("Automatische Auswahl", self.service.state.session.outbox[0])
 
-    async def test_vegetarian_quota_includes_seafood(self):
-        self.service.state.reset_week(self.service.local_now().date())
-        self.service.state.meat_recipes_chosen_this_week = 3
+    async def test_fixed_vegetarian_day_includes_seafood(self):
+        self.settings = Settings(recipes_per_day=2, vegetarian_days=["monday"])
+        self.service = self.build()
         await self.service.tick()
         self.assertEqual(self.api.filters, [True])
         await self.service.handle_update(self.update())
-        self.assertEqual(self.service.state.meat_recipes_chosen_this_week, 3)
+        self.assertTrue(all(recipe.vegetarian for recipe in self.service.state.session.recipes))
 
-    async def test_failed_details_delivery_does_not_reselect_or_recount(self):
+    async def test_failed_details_delivery_does_not_reselect(self):
         await self.service.tick()
         await self.service.handle_update(self.update())
         self.telegram.fail = True
@@ -205,7 +203,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.service = self.build()
         self.telegram.fail = False
         await self.service.tick()
-        self.assertEqual(self.service.state.meat_recipes_chosen_this_week, 1)
         self.assertEqual(self.service.state.session.phase, "done")
 
     async def test_failed_announcement_recovers_same_dessert(self):
@@ -221,17 +218,18 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.state.dessert_days_used_this_week, 1)
         self.assertEqual(self.service.state.session.deadline, self.now + 3600)
 
-    async def test_complete_week_obeys_both_limits(self):
+    async def test_complete_week_uses_fixed_vegetarian_days(self):
+        self.settings = Settings(recipes_per_day=2, vegetarian_days=["monday", "friday"])
+        self.service = self.build()
         for _ in range(7):
             await self.service.tick()
             await self.service.handle_update(self.update())
             await self.service.tick()
             self.now += 86400
-        self.assertEqual(self.service.state.meat_recipes_chosen_this_week, 3)
         self.assertEqual(self.service.state.dessert_days_used_this_week, 2)
-        self.assertEqual(self.api.filters, [False] * 3 + [True] * 4)
+        self.assertEqual(self.api.filters, [True, False, False, False, True, False, False])
         await self.service.tick()
-        self.assertEqual(self.service.state.meat_recipes_chosen_this_week, 0)
+        self.assertEqual(self.api.filters[-1], True)
 
     async def test_dessert_never_exceeds_limit_and_sunday_forces(self):
         self.settings = Settings(recipes_per_day=2, dessert_days_per_week=0)
@@ -249,7 +247,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.tick()
         self.now += 86400
         await self.service.tick()
-        self.assertEqual(self.service.state.meat_recipes_chosen_this_week, 0)
         self.assertEqual(self.service.state.session.day, "2026-09-14")
 
     async def test_fetch_budget_persists_across_restart(self):
@@ -338,26 +335,31 @@ class UnitTests(unittest.TestCase):
 
     def test_config_validation(self):
         for kwargs in ({"recipes_per_day": 0}, {"recipes_per_day": True},
-                       {"start_time": "8:00"}, {"active_window_minutes": 0},
-                       {"meat_days_per_week": 8}, {"dessert_days_per_week": -1},
-                       {"trigger_codeword": "two words"}, {"language": "de"},
-                       {"interaction_language": "fr"}):
+                        {"start_time": "8:00"}, {"active_window_minutes": 0},
+                        {"vegetarian_days": ["monday", "monday"]},
+                        {"vegetarian_days": ["Monday"]}, {"vegetarian_days": ["holiday"]},
+                        {"vegetarian_days": "monday"}, {"dessert_days_per_week": -1},
+                        {"trigger_codeword": "two words"}, {"language": "de"},
+                        {"interaction_language": "fr"}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 Settings(**kwargs)
 
+    def test_vegetarian_days_accepts_an_empty_json_list(self):
+        self.assertEqual(Settings(vegetarian_days=[]).vegetarian_days, ())
+
     def test_year_aware_week_reset(self):
         self.assertEqual(week_key(datetime(2027, 1, 1).date()), "2026-W53")
-        state = State(week="2025-W01", meat_recipes_chosen_this_week=3)
+        state = State(week="2025-W01", dessert_days_used_this_week=2)
         self.assertTrue(state.reset_week(datetime(2026, 1, 1).date()))
-        self.assertEqual(state.meat_recipes_chosen_this_week, 0)
+        self.assertEqual(state.dessert_days_used_this_week, 0)
         self.assertFalse(state.reset_week(datetime(2026, 1, 2).date()))
 
     def test_state_roundtrip_and_corruption_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
             store = StateStore(path)
-            store.save(State(week="2026-W37", meat_recipes_chosen_this_week=2))
-            self.assertEqual(store.load().meat_recipes_chosen_this_week, 2)
+            store.save(State(week="2026-W37", dessert_days_used_this_week=2))
+            self.assertEqual(store.load().dessert_days_used_this_week, 2)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             path.write_text("broken", encoding="utf-8")
             with self.assertRaises(ValueError):
@@ -366,12 +368,25 @@ class UnitTests(unittest.TestCase):
     def test_failed_atomic_replace_preserves_existing_state(self):
         with tempfile.TemporaryDirectory() as directory:
             store = StateStore(Path(directory) / "state.json")
-            store.save(State(meat_recipes_chosen_this_week=1))
+            store.save(State(dessert_days_used_this_week=1))
             with patch("recipe_bot.state.os.replace", side_effect=OSError), self.assertRaises(OSError):
-                store.save(State(meat_recipes_chosen_this_week=2))
-            self.assertEqual(store.load().meat_recipes_chosen_this_week, 1)
+                store.save(State(dessert_days_used_this_week=2))
+            self.assertEqual(store.load().dessert_days_used_this_week, 1)
 
-    def test_partial_state_cannot_reset_quotas(self):
+    def test_legacy_state_migrates_without_meat_counter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            store = StateStore(path)
+            legacy = {"week": "2026-W37", "meat_recipes_chosen_this_week": 2,
+                      "dessert_days_used_this_week": 1, "session": None, "fetch_day": "",
+                      "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            state = store.load()
+            self.assertEqual(state.version, 2)
+            self.assertEqual(state.dessert_days_used_this_week, 1)
+            self.assertNotIn("meat_recipes_chosen_this_week", json.loads(path.read_text(encoding="utf-8")))
+
+    def test_partial_state_cannot_reset_counters(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
             path.write_text('{"version": 1, "week": "2026-W37"}', encoding="utf-8")
