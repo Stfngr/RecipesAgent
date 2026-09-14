@@ -6,7 +6,7 @@ import time
 
 from .api import APIError, Lara, Spoonacular, Telegram
 from .config import Settings, WEEKDAYS
-from .recipes import details, is_skip_command, parse_selection, skipped, summary
+from .recipes import details, is_resend_command, is_skip_command, parse_selection, skipped, summary
 from .state import Session, StateStore
 
 log = logging.getLogger(__name__)
@@ -143,6 +143,17 @@ class RecipeService:
         self.store.save(self.state)
         log.info("User skipped selection")
 
+    async def resend_menu(self, session: Session):
+        for message in summary(session.recipes, session.dessert, session.language,
+                               session.trigger, session.window_minutes):
+            await self.telegram.send(message)
+        log.info("Menu resent: %s", session.day)
+
+    async def notify_no_menu(self):
+        message = ("Heute ist keine Rezeptauswahl verfuegbar." if self.settings.interaction_language == "de"
+                   else "No recipe menu is available today.")
+        await self.telegram.send(message)
+
     async def handle_update(self, update: dict):
         message = update.get("message", {})
         if message.get("chat", {}).get("id") != self.telegram.chat_id:
@@ -152,9 +163,17 @@ class RecipeService:
             return
         async with self.lock:
             session = self.state.session
-            if not session or session.phase != "active" or not text.startswith(session.trigger):
+            if not session or not text.startswith(session.trigger):
                 return
             self.reset_week()
+            if is_resend_command(text, session.trigger):
+                if session.day == self.local_now().date().isoformat():
+                    await self.resend_menu(session)
+                else:
+                    await self.notify_no_menu()
+                return
+            if session.phase != "active":
+                return
             if self.clock() >= session.deadline:
                 self.resolve(self.rng.randrange(len(session.recipes)), automatic=True)
                 return
@@ -181,11 +200,6 @@ class RecipeService:
     async def listen(self):
         offset = None
         while True:
-            session = self.state.session
-            if session is None or session.phase != "active":
-                # Poll only while a menu can accept a selection.
-                await asyncio.sleep(1)
-                continue
             try:
                 updates = await self.telegram.updates(offset)
                 for update in updates:

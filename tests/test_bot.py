@@ -13,7 +13,7 @@ import httpx
 from recipe_bot.api import APIError, Lara, Spoonacular, Telegram
 from recipe_bot.__main__ import TEST_MESSAGE, main, send_test_message
 from recipe_bot.config import Credentials, Settings, load_config
-from recipe_bot.recipes import Recipe, details, is_skip_command, parse_selection, plain_text, skipped, split_message, summary
+from recipe_bot.recipes import Recipe, details, is_resend_command, is_skip_command, parse_selection, plain_text, skipped, split_message, summary
 from recipe_bot.service import RecipeService
 from recipe_bot.state import State, StateStore, week_key
 
@@ -170,6 +170,33 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.telegram.messages[-1], "Keine Auswahl fuer heute. Bis morgen.")
         self.assertEqual(len(self.api.filters), 1)
         await self.service.tick()
+        self.assertEqual(len(self.api.filters), 1)
+
+    async def test_resend_rebuilds_current_menu_without_fetching(self):
+        await self.service.tick()
+        original_menu = self.telegram.messages.copy()
+        await self.service.handle_update(self.update("!bot resend"))
+        self.assertEqual(self.telegram.messages, original_menu * 2)
+        self.assertEqual(len(self.api.filters), 1)
+        self.assertEqual(self.service.state.session.phase, "active")
+
+    async def test_resend_after_selection_preserves_completed_session(self):
+        await self.service.tick()
+        await self.service.handle_update(self.update("!bot 1"))
+        await self.service.tick()
+        completed_messages = len(self.telegram.messages)
+        await self.service.handle_update(self.update("!bot resend"))
+        self.assertGreater(len(self.telegram.messages), completed_messages)
+        self.assertIn("Heutige Rezeptauswahl:", self.telegram.messages[-1])
+        self.assertEqual(self.service.state.session.phase, "done")
+        self.assertEqual(self.service.state.session.selected_index, 0)
+        self.assertEqual(len(self.api.filters), 1)
+
+    async def test_resend_for_old_menu_reports_no_current_menu(self):
+        await self.service.tick()
+        self.now += 86400
+        await self.service.handle_update(self.update("!bot resend"))
+        self.assertEqual(self.telegram.messages[-1], "Heute ist keine Rezeptauswahl verfuegbar.")
         self.assertEqual(len(self.api.filters), 1)
 
     async def test_failed_skip_delivery_recovers_after_restart(self):
@@ -334,12 +361,10 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.telegram.call.await_count, 2)
 
     async def test_listener_does_not_poll_outside_selection_window(self):
-        self.telegram.updates = AsyncMock()
-        with patch("recipe_bot.service.asyncio.sleep", new_callable=AsyncMock,
-                   side_effect=asyncio.CancelledError):
-            with self.assertRaises(asyncio.CancelledError):
-                await self.service.listen()
-        self.telegram.updates.assert_not_awaited()
+        self.telegram.updates = AsyncMock(side_effect=asyncio.CancelledError)
+        with self.assertRaises(asyncio.CancelledError):
+            await self.service.listen()
+        self.telegram.updates.assert_awaited_once_with(None)
 
 
 class UnitTests(unittest.TestCase):
@@ -425,6 +450,7 @@ class UnitTests(unittest.TestCase):
         self.assertTrue(all(len(part.encode("utf-16-le")) // 2 <= 4096 for part in chunks))
         self.assertIn("Dessert today: NO", summary([recipe()], False, "en", "!bot", 60)[0])
         self.assertIn("!bot 0", summary([recipe()], False, "en", "!bot", 60)[0])
+        self.assertIn("!bot resend", summary([recipe()], False, "en", "!bot", 60)[0])
         self.assertIn("Ingredients:", details(recipe(), "en", False)[0])
         self.assertEqual(skipped("en"), ["No selection for today. See you tomorrow."])
 
@@ -435,6 +461,9 @@ class UnitTests(unittest.TestCase):
         self.assertTrue(is_skip_command("!b.t 0", "!b.t"))
         for text in ("!b.t 00", "!b.t 0 ", "!b.t 0 extra", "!bat 0"):
             self.assertFalse(is_skip_command(text, "!b.t"))
+        self.assertTrue(is_resend_command("!b.t resend", "!b.t"))
+        for text in ("!b.t resend ", "!b.t resend now", "!bat resend"):
+            self.assertFalse(is_resend_command(text, "!b.t"))
 
     def test_credentials_not_in_repr(self):
         with tempfile.TemporaryDirectory() as directory:

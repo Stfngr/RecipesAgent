@@ -114,8 +114,12 @@ def summary(recipes: list[Recipe], dessert: bool, language: str, trigger: str, m
         if de else f"Select: {trigger} <number>; {trigger} 0 for no selection "
         f"(active for {minutes} minutes)"
     )
+    resend_hint = (f"Liste erneut senden: {trigger} resend" if de
+                   else f"Resend list: {trigger} resend")
     titles = [f"{index}. {' '.join(recipe.title.split())}" for index, recipe in enumerate(recipes, 1)]
-    return split_message("\n".join([heading, *titles, "", f"{dessert_label}: {status}", "", hint]))
+    return split_message("\n".join([
+        heading, *titles, "", f"{dessert_label}: {status}", "", hint, resend_hint,
+    ]))
 
 
 def details(recipe: Recipe, language: str, automatic: bool) -> list[str]:
@@ -159,3 +163,7 @@ def parse_selection(text: str, trigger: str, count: int) -> int | None:
 
 def is_skip_command(text: str, trigger: str) -> bool:
     return text == f"{trigger} 0"
+
+
+def is_resend_command(text: str, trigger: str) -> bool:
+    return text == f"{trigger} resend"

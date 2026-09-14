@@ -87,6 +87,10 @@ See `settings.json.example`. Limits: 1-100 recipes, 1-1439 active minutes,
 Restart after changing settings. Existing sessions retain their original trigger,
 language, candidates, dessert decision, and deadline.
 
+Use `<trigger_codeword> resend` (for example, `!bot resend`) to resend today's
+saved recipe menu. Any group member may use it. It never calls Spoonacular,
+does not consume a fetch attempt, and does not reopen or change selection.
+
 Daily scheduling uses local wall time; selection duration uses elapsed seconds.
 A nonexistent spring-forward start time runs at the first later local time.
 Repeated autumn times cannot create two sessions for one date.
