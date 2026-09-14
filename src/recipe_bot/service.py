@@ -153,10 +153,12 @@ class RecipeService:
         log.info("User skipped selection")
 
     async def resend_menu(self, session: Session):
-        for message in summary(session.recipes, session.dessert, session.language,
-                               session.trigger, session.window_minutes):
+        messages = (summary(session.recipes, session.dessert, session.language,
+                            session.trigger, session.window_minutes)
+                    if session.phase in ("announcing", "active") else session.outbox)
+        for message in messages:
             await self.telegram.send(message)
-        log.info("Menu resent: %s", session.day)
+        log.info("Session output resent: %s", session.day)
 
     async def notify_no_menu(self):
         message = ("Heute ist keine Rezeptauswahl verfuegbar." if self.settings.interaction_language == "de"

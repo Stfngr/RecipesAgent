@@ -184,12 +184,21 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.tick()
         await self.service.handle_update(self.update("!bot 1"))
         await self.service.tick()
-        completed_messages = len(self.telegram.messages)
+        selected_messages = self.telegram.messages[1:].copy()
         await self.service.handle_update(self.update("!bot resend"))
-        self.assertGreater(len(self.telegram.messages), completed_messages)
-        self.assertIn("Heutige Rezeptauswahl:", self.telegram.messages[-1])
+        self.assertEqual(self.telegram.messages[-len(selected_messages):], selected_messages)
+        self.assertIn("Ausgewaehltes Rezept: Recipe 1", self.telegram.messages[-1])
         self.assertEqual(self.service.state.session.phase, "done")
         self.assertEqual(self.service.state.session.selected_index, 0)
+        self.assertEqual(len(self.api.filters), 1)
+
+    async def test_resend_after_skip_preserves_skip_confirmation(self):
+        await self.service.tick()
+        await self.service.handle_update(self.update("!bot 0"))
+        await self.service.tick()
+        await self.service.handle_update(self.update("!bot resend"))
+        self.assertEqual(self.telegram.messages[-1], "Keine Auswahl fuer heute. Bis morgen.")
+        self.assertEqual(self.service.state.session.phase, "skipped")
         self.assertEqual(len(self.api.filters), 1)
 
     async def test_resend_for_old_menu_reports_no_current_menu(self):
@@ -230,6 +239,16 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.state.session.phase, "done")
         self.assertIn("Automatische Auswahl", self.telegram.messages[-1])
         self.assertEqual(len(self.api.filters), 1)
+
+    async def test_resend_after_timeout_preserves_automatic_selection(self):
+        await self.service.tick()
+        self.now = self.service.state.session.deadline
+        await self.service.tick()
+        selected_messages = self.telegram.messages[1:].copy()
+        await self.service.handle_update(self.update("!bot resend"))
+        self.assertEqual(self.telegram.messages[-len(selected_messages):], selected_messages)
+        self.assertIn("Automatische Auswahl", self.telegram.messages[-1])
+        self.assertEqual(self.service.state.session.phase, "done")
 
     async def test_late_command_cannot_win_race_with_timeout(self):
         await self.service.tick()
