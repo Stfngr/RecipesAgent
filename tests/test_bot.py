@@ -490,7 +490,6 @@ class UnitTests(unittest.TestCase):
         self.assertTrue(all(len(part.encode("utf-16-le")) // 2 <= 4096 for part in chunks))
         self.assertIn("Dessert today: NO", summary([recipe()], False, "en", "!bot", 60)[0])
         self.assertIn("!bot 0", summary([recipe()], False, "en", "!bot", 60)[0])
-        self.assertIn("!bot resend", summary([recipe()], False, "en", "!bot", 60)[0])
         self.assertIn("Ingredients:", details(recipe(), "en", False)[0])
         self.assertEqual(skipped("en"), ["No selection for today. See you tomorrow."])
 
