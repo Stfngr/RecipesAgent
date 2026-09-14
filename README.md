@@ -1,8 +1,8 @@
 # Daily Recipe Telegram Bot
 
 One lightweight Python process, supervised by systemd. An internal asyncio scheduler
-starts a daily menu; Telegram long polling runs only during its active selection
-window. No cron, inbound port, webhook server, or LLM needed.
+starts a daily menu; Telegram long polling receives selection and resend commands.
+No cron, inbound port, webhook server, or LLM needed.
 
 ## Behavior
 
@@ -18,6 +18,8 @@ window. No cron, inbound port, webhook server, or LLM needed.
   unused dessert days / remaining days, with forced use near week's end.
 - Dessert counters use ISO year and week and reset Monday in the configured timezone.
   Downtime and New Year are handled on startup. Counts belong to the menu date.
+- Set `sunday_leftovers` to `true` to skip recipe requests on Sunday and send
+  `Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)` instead.
 - Recipe titles, ingredients, and instructions remain **English** unless optional
   Lara Translate credentials are configured. Bot messages support German and English
   independently.
@@ -84,6 +86,7 @@ See `settings.json.example`. Limits: 1-100 recipes, 1-1439 active minutes,
 `["monday", "friday"]`, `HH:MM` start time, IANA timezone such as `Europe/Berlin`.
 `language` must be `en`; `interaction_language` can be `de` or `en`.
 `trigger_codeword` is case-sensitive, without whitespace, up to 32 characters.
+`sunday_leftovers` must be `true` or `false`; it defaults to `false`.
 Restart after changing settings. Existing sessions retain their original trigger,
 language, candidates, dessert decision, and deadline.
 

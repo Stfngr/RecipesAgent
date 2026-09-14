@@ -47,9 +47,12 @@ class RecipeService:
             now = self.local_now()
             if (self.state.session is None or self.state.session.phase in ("done", "skipped")) and (
                 self.state.session is None or self.state.session.day < now.date().isoformat()
-            ) and now.time() >= self.settings.start:
-                await self.create_session()
-                await self.deliver()
+            ) and now.time() >= self.settings.start and self.state.sunday_leftovers_day != now.date().isoformat():
+                if self.settings.sunday_leftovers and now.weekday() == 6:
+                    await self.send_sunday_leftovers(now.date().isoformat())
+                else:
+                    await self.create_session()
+                    await self.deliver()
 
     async def create_session(self):
         day = self.local_now().date().isoformat()
@@ -107,6 +110,12 @@ class RecipeService:
         except APIError as notification_error:
             log.warning("Could not send recipe failure alert: %s", notification_error)
 
+    async def send_sunday_leftovers(self, day: str):
+        await self.telegram.send("Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)")
+        self.state.sunday_leftovers_day = day
+        self.store.save(self.state)
+        log.info("Sunday leftovers message sent: %s", day)
+
     async def deliver(self):
         session = self.state.session
         if session is None or session.phase not in ("announcing", "delivering", "skipping"):
@@ -163,16 +172,17 @@ class RecipeService:
             return
         async with self.lock:
             session = self.state.session
-            if not session or not text.startswith(session.trigger):
+            trigger = session.trigger if session else self.settings.trigger_codeword
+            if not text.startswith(trigger):
                 return
             self.reset_week()
-            if is_resend_command(text, session.trigger):
-                if session.day == self.local_now().date().isoformat():
+            if is_resend_command(text, trigger):
+                if session and session.day == self.local_now().date().isoformat():
                     await self.resend_menu(session)
                 else:
                     await self.notify_no_menu()
                 return
-            if session.phase != "active":
+            if not session or session.phase != "active":
                 return
             if self.clock() >= session.deadline:
                 self.resolve(self.rng.randrange(len(session.recipes)), automatic=True)

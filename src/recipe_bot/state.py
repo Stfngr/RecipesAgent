@@ -71,10 +71,11 @@ class State:
     fetch_day: str = ""
     fetch_attempts: int = 0
     fetch_retry_at: float = 0
-    version: int = field(default=2)
+    sunday_leftovers_day: str = ""
+    version: int = field(default=3)
 
     def __post_init__(self):
-        if self.version != 2:
+        if self.version != 3:
             raise ValueError("Unsupported state version")
         if self.week and not re.fullmatch(r"[0-9]{4}-W[0-9]{2}", self.week):
             raise ValueError("Invalid state week")
@@ -82,6 +83,8 @@ class State:
             raise ValueError("Invalid weekly counter")
         if self.fetch_day:
             date.fromisoformat(self.fetch_day)
+        if self.sunday_leftovers_day:
+            date.fromisoformat(self.sunday_leftovers_day)
         if type(self.fetch_attempts) is not int or not 0 <= self.fetch_attempts <= 3:
             raise ValueError("Invalid fetch attempt count")
         if type(self.fetch_retry_at) not in (int, float) or not math.isfinite(self.fetch_retry_at):
@@ -107,15 +110,22 @@ class StateStore:
             data = json.load(file)
         if not isinstance(data, dict):
             raise ValueError("Incomplete or unsupported state file")
-        legacy_fields = {item.name for item in fields(State)} | {"meat_recipes_chosen_this_week"}
-        migrated = data.get("version") == 1 and set(data) == legacy_fields
-        if migrated:
+        current_fields = {item.name for item in fields(State)}
+        version_two_fields = current_fields - {"sunday_leftovers_day"}
+        version_one_fields = version_two_fields | {"meat_recipes_chosen_this_week"}
+        migrated = False
+        if data.get("version") == 1 and set(data) == version_one_fields:
             meat_counter = data["meat_recipes_chosen_this_week"]
             if type(meat_counter) is not int or not 0 <= meat_counter <= 7:
                 raise ValueError("Invalid weekly counter")
             data.pop("meat_recipes_chosen_this_week")
             data["version"] = 2
-        if set(data) != {item.name for item in fields(State)}:
+            migrated = True
+        if data.get("version") == 2 and set(data) == version_two_fields:
+            data["sunday_leftovers_day"] = ""
+            data["version"] = 3
+            migrated = True
+        if set(data) != current_fields:
             raise ValueError("Incomplete or unsupported state file")
         if data.get("session") is not None:
             session = data["session"]

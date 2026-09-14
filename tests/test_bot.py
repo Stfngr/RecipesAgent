@@ -246,6 +246,36 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.handle_update(self.update())
         self.assertTrue(all(recipe.vegetarian for recipe in self.service.state.session.recipes))
 
+    async def test_sunday_leftovers_sends_message_without_fetching(self):
+        self.now = datetime(2026, 9, 13, 8, tzinfo=ZoneInfo("Europe/Berlin")).timestamp()
+        self.settings = Settings(recipes_per_day=2, sunday_leftovers=True)
+        self.service = self.build()
+        await self.service.tick()
+        self.assertEqual(self.telegram.messages, [
+            "Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)"
+        ])
+        self.assertEqual(self.api.filters, [])
+        self.assertIsNone(self.service.state.session)
+        self.assertEqual(self.service.state.sunday_leftovers_day, "2026-09-13")
+
+    async def test_sunday_leftovers_is_delivered_once_across_restart(self):
+        self.now = datetime(2026, 9, 13, 8, tzinfo=ZoneInfo("Europe/Berlin")).timestamp()
+        self.settings = Settings(recipes_per_day=2, sunday_leftovers=True)
+        self.service = self.build()
+        await self.service.tick()
+        self.service = self.build()
+        await self.service.tick()
+        self.assertEqual(len(self.telegram.messages), 1)
+        self.assertEqual(self.api.filters, [])
+
+    async def test_sunday_leftovers_disabled_sends_normal_menu(self):
+        self.now = datetime(2026, 9, 13, 8, tzinfo=ZoneInfo("Europe/Berlin")).timestamp()
+        self.settings = Settings(recipes_per_day=2, sunday_leftovers=False)
+        self.service = self.build()
+        await self.service.tick()
+        self.assertIn("Heutige Rezeptauswahl:", self.telegram.messages[0])
+        self.assertEqual(len(self.api.filters), 1)
+
     async def test_failed_details_delivery_does_not_reselect(self):
         await self.service.tick()
         await self.service.handle_update(self.update())
@@ -390,7 +420,7 @@ class UnitTests(unittest.TestCase):
                         {"vegetarian_days": ["Monday"]}, {"vegetarian_days": ["holiday"]},
                         {"vegetarian_days": "monday"}, {"dessert_days_per_week": -1},
                         {"trigger_codeword": "two words"}, {"language": "de"},
-                        {"interaction_language": "fr"}):
+                        {"interaction_language": "fr"}, {"sunday_leftovers": 1}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 Settings(**kwargs)
 
@@ -428,13 +458,23 @@ class UnitTests(unittest.TestCase):
             path = Path(directory) / "state.json"
             store = StateStore(path)
             legacy = {"week": "2026-W37", "meat_recipes_chosen_this_week": 2,
-                      "dessert_days_used_this_week": 1, "session": None, "fetch_day": "",
-                      "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
+                       "dessert_days_used_this_week": 1, "session": None, "fetch_day": "",
+                       "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = store.load()
-            self.assertEqual(state.version, 2)
+            self.assertEqual(state.version, 3)
             self.assertEqual(state.dessert_days_used_this_week, 1)
             self.assertNotIn("meat_recipes_chosen_this_week", json.loads(path.read_text(encoding="utf-8")))
+
+    def test_version_two_state_migrates_for_sunday_leftovers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            legacy = {"week": "2026-W37", "dessert_days_used_this_week": 1, "session": None,
+                      "fetch_day": "", "fetch_attempts": 0, "fetch_retry_at": 0, "version": 2}
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            state = StateStore(path).load()
+            self.assertEqual(state.version, 3)
+            self.assertEqual(state.sunday_leftovers_day, "")
 
     def test_partial_state_cannot_reset_counters(self):
         with tempfile.TemporaryDirectory() as directory:

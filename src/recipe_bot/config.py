@@ -22,6 +22,7 @@ class Settings:
     vegetarian_days: tuple[str, ...] = ()
     dessert_days_per_week: int = 2
     interaction_language: str = "de"
+    sunday_leftovers: bool = False
 
     def __post_init__(self):
         for name, low, high in (
@@ -48,6 +49,8 @@ class Settings:
             raise ValueError("Spoonacular recipes support English only; set language=en")
         if self.interaction_language not in ("en", "de"):
             raise ValueError("interaction_language must be en or de")
+        if type(self.sunday_leftovers) is not bool:
+            raise ValueError("sunday_leftovers must be true or false")
         if not isinstance(self.trigger_codeword, str) or not re.fullmatch(
             r"\S{1,32}", self.trigger_codeword
         ):

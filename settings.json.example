@@ -7,5 +7,6 @@
   "trigger_codeword": "!bot",
   "vegetarian_days": ["monday", "friday"],
   "dessert_days_per_week": 2,
-  "interaction_language": "de"
+  "interaction_language": "de",
+  "sunday_leftovers": false
 }
