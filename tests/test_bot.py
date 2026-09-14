@@ -93,7 +93,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.service.state.session)
         self.now += 1
         await self.service.tick()
-        self.assertIn("Dessert heute: JA", self.telegram.messages[0])
+        self.assertIn("Dessert heute: 😊", self.telegram.messages[0])
         self.assertEqual(self.service.state.session.phase, "active")
         await self.service.handle_update(self.update())
         await self.service.tick()
@@ -507,8 +507,20 @@ class UnitTests(unittest.TestCase):
         chunks = split_message("\U0001f600" * 5000)
         self.assertEqual("".join(chunks), "\U0001f600" * 5000)
         self.assertTrue(all(len(part.encode("utf-16-le")) // 2 <= 4096 for part in chunks))
-        self.assertIn("Dessert today: NO", summary([recipe()], False, "en", "!bot", 60)[0])
-        self.assertIn("!bot 0", summary([recipe()], False, "en", "!bot", 60)[0])
+        self.assertEqual(summary([recipe()], False, "de", "!bot", 60), [
+            "Heutige Rezeptauswahl:\n\n"
+            "1. Recipe 1\n\n"
+            "Dessert heute: ☹️\n\n"
+            "Auswahl: !bot <Nummer>\n"
+            "!bot 0 fuer keine Auswahl (aktiv fuer 60 Minuten)"
+        ])
+        self.assertEqual(summary([recipe()], True, "en", "!bot", 60), [
+            "Today's recipes:\n\n"
+            "1. Recipe 1\n\n"
+            "Dessert today: 😊\n\n"
+            "Select: !bot <number>\n"
+            "!bot 0 for no selection (active for 60 minutes)"
+        ])
         self.assertIn("Ingredients:", details(recipe(), "en", False)[0])
         self.assertEqual(skipped("en"), ["No selection for today. See you tomorrow."])
 

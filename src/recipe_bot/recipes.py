@@ -106,16 +106,16 @@ def split_message(text: str) -> list[str]:
 def summary(recipes: list[Recipe], dessert: bool, language: str, trigger: str, minutes: int) -> list[str]:
     de = language == "de"
     heading = "Heutige Rezeptauswahl:" if de else "Today's recipes:"
-    status = ("JA" if dessert else "NEIN") if de else ("YES" if dessert else "NO")
+    status = "😊" if dessert else "☹️"
     dessert_label = "Dessert heute" if de else "Dessert today"
     hint = (
-        f"Auswahl: {trigger} <Nummer>; {trigger} 0 fuer keine Auswahl "
+        f"Auswahl: {trigger} <Nummer>\n{trigger} 0 fuer keine Auswahl "
         f"(aktiv fuer {minutes} Minuten)"
-        if de else f"Select: {trigger} <number>; {trigger} 0 for no selection "
+        if de else f"Select: {trigger} <number>\n{trigger} 0 for no selection "
         f"(active for {minutes} minutes)"
     )
     titles = [f"{index}. {' '.join(recipe.title.split())}" for index, recipe in enumerate(recipes, 1)]
-    return split_message("\n".join([heading, *titles, "", f"{dessert_label}: {status}", "", hint]))
+    return split_message("\n".join([heading, "", *titles, "", f"{dessert_label}: {status}", "", hint]))
 
 
 def details(recipe: Recipe, language: str, automatic: bool) -> list[str]:
