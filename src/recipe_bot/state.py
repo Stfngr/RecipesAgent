@@ -29,6 +29,7 @@ class Session:
     opened_at: float | None = None
     deadline: float | None = None
     selected_index: int | None = None
+    photo_delivered: bool = False
 
     def __post_init__(self):
         date.fromisoformat(self.day)
@@ -50,6 +51,8 @@ class Session:
             raise ValueError("Invalid session messages")
         if type(self.next_message) is not int or not 0 <= self.next_message <= len(self.outbox):
             raise ValueError("Invalid delivery cursor")
+        if type(self.photo_delivered) is not bool:
+            raise ValueError("Invalid photo delivery state")
         if self.phase != "announcing":
             for value in (self.opened_at, self.deadline):
                 if type(value) not in (int, float) or not math.isfinite(value):
@@ -72,10 +75,10 @@ class State:
     fetch_attempts: int = 0
     fetch_retry_at: float = 0
     sunday_leftovers_day: str = ""
-    version: int = field(default=3)
+    version: int = field(default=4)
 
     def __post_init__(self):
-        if self.version != 3:
+        if self.version != 4:
             raise ValueError("Unsupported state version")
         if self.week and not re.fullmatch(r"[0-9]{4}-W[0-9]{2}", self.week):
             raise ValueError("Invalid state week")
@@ -124,6 +127,11 @@ class StateStore:
         if data.get("version") == 2 and set(data) == version_two_fields:
             data["sunday_leftovers_day"] = ""
             data["version"] = 3
+            migrated = True
+        if data.get("version") == 3 and set(data) == current_fields:
+            if data["session"] is not None:
+                data["session"].setdefault("photo_delivered", False)
+            data["version"] = 4
             migrated = True
         if set(data) != current_fields:
             raise ValueError("Incomplete or unsupported state file")

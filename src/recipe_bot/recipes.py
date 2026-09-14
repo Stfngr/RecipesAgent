@@ -43,6 +43,7 @@ class Recipe:
     source_url: str = ""
     source_name: str = ""
     license: str = ""
+    image_url: str = ""
 
     def __post_init__(self):
         if type(self.id) is not int or self.id <= 0:
@@ -59,7 +60,7 @@ class Recipe:
         for value in (self.ready_minutes, self.prep_minutes, self.cooking_minutes, self.servings):
             if value is not None and (type(value) is not int or value < 0):
                 raise ValueError("Invalid recipe time or servings")
-        for value in (self.source_url, self.source_name, self.license):
+        for value in (self.source_url, self.source_name, self.license, self.image_url):
             if not isinstance(value, str):
                 raise ValueError("Invalid recipe attribution")
 
@@ -86,6 +87,7 @@ class Recipe:
             source_url=data.get("sourceUrl") or data.get("spoonacularSourceUrl") or "",
             source_name=plain_text(data.get("creditsText") or data.get("sourceName") or ""),
             license=data.get("license") or "",
+            image_url=data.get("image") or "",
         )
 
 

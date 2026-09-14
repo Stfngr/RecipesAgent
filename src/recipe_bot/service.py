@@ -120,6 +120,12 @@ class RecipeService:
         session = self.state.session
         if session is None or session.phase not in ("announcing", "delivering", "skipping"):
             return
+        if session.phase == "delivering" and not session.photo_delivered:
+            recipe = session.recipes[session.selected_index]
+            if recipe.image_url:
+                await self.telegram.send_photo(recipe.image_url, recipe.title)
+            session.photo_delivered = True
+            self.store.save(self.state)
         while session.next_message < len(session.outbox):
             await self.telegram.send(session.outbox[session.next_message])
             session.next_message += 1
@@ -156,6 +162,10 @@ class RecipeService:
         messages = (summary(session.recipes, session.dessert, session.language,
                             session.trigger, session.window_minutes)
                     if session.phase in ("announcing", "active") else session.outbox)
+        if session.phase in ("delivering", "done"):
+            recipe = session.recipes[session.selected_index]
+            if recipe.image_url:
+                await self.telegram.send_photo(recipe.image_url, recipe.title)
         for message in messages:
             await self.telegram.send(message)
         log.info("Session output resent: %s", session.day)

@@ -112,5 +112,8 @@ class Telegram:
         await self.call("sendMessage", chat_id=self.chat_id, text=text,
                         link_preview_options={"is_disabled": True})
 
+    async def send_photo(self, image_url: str, caption: str):
+        await self.call("sendPhoto", chat_id=self.chat_id, photo=image_url, caption=caption)
+
     async def updates(self, offset: int | None):
         return await self.call("getUpdates", offset=offset, timeout=30, allowed_updates=["message"])

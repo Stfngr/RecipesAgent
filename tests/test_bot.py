@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import asdict
 from datetime import datetime
 import json
 from pathlib import Path
@@ -15,7 +16,7 @@ from recipe_bot.__main__ import TEST_MESSAGE, main, send_test_message
 from recipe_bot.config import Credentials, Settings, load_config
 from recipe_bot.recipes import Recipe, details, is_resend_command, is_skip_command, parse_selection, plain_text, skipped, split_message, summary
 from recipe_bot.service import RecipeService
-from recipe_bot.state import State, StateStore, week_key
+from recipe_bot.state import Session, State, StateStore, week_key
 
 
 def recipe(identity=1, vegetarian=True):
@@ -27,12 +28,23 @@ class FakeTelegram:
 
     def __init__(self):
         self.messages = []
+        self.photos = []
+        self.deliveries = []
         self.fail = False
+        self.fail_messages = False
+        self.fail_photos = False
 
     async def send(self, text):
-        if self.fail:
+        if self.fail or self.fail_messages:
             raise APIError("Telegram")
         self.messages.append(text)
+        self.deliveries.append(("message", text))
+
+    async def send_photo(self, image_url, caption):
+        if self.fail or self.fail_photos:
+            raise APIError("Telegram")
+        self.photos.append((image_url, caption))
+        self.deliveries.append(("photo", image_url, caption))
 
 
 class FakeRecipes:
@@ -64,7 +76,7 @@ class FakeTranslator:
             [f"Deutsch {ingredient}" for ingredient in item.ingredients],
             [f"Deutsch {instruction}" for instruction in item.instructions],
             item.ready_minutes, item.prep_minutes, item.cooking_minutes, item.servings,
-            item.source_url, item.source_name, item.license,
+            item.source_url, item.source_name, item.license, item.image_url,
         ) for item in recipes]
 
 
@@ -191,6 +203,45 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.state.session.phase, "done")
         self.assertEqual(self.service.state.session.selected_index, 0)
         self.assertEqual(len(self.api.filters), 1)
+
+    async def test_selected_recipe_photo_precedes_details_and_resends(self):
+        await self.service.tick()
+        self.service.state.session.recipes[0].image_url = "https://images.example/recipe.jpg"
+        self.telegram.deliveries.clear()
+        await self.service.handle_update(self.update("!bot 1"))
+        await self.service.tick()
+        self.assertEqual(self.telegram.deliveries[0], (
+            "photo", "https://images.example/recipe.jpg", "Recipe 1"
+        ))
+        self.assertIn("Ausgewaehltes Rezept: Recipe 1", self.telegram.deliveries[1][1])
+        await self.service.handle_update(self.update("!bot resend"))
+        self.assertEqual(self.telegram.deliveries[-2], (
+            "photo", "https://images.example/recipe.jpg", "Recipe 1"
+        ))
+        self.assertIn("Ausgewaehltes Rezept: Recipe 1", self.telegram.deliveries[-1][1])
+
+    async def test_recipe_without_image_sends_details_only(self):
+        await self.service.tick()
+        self.telegram.deliveries.clear()
+        await self.service.handle_update(self.update("!bot 1"))
+        await self.service.tick()
+        self.assertFalse(self.telegram.photos)
+        self.assertEqual(self.telegram.deliveries[0][0], "message")
+
+    async def test_restart_after_photo_delivery_does_not_repeat_photo(self):
+        await self.service.tick()
+        self.service.state.session.recipes[0].image_url = "https://images.example/recipe.jpg"
+        await self.service.handle_update(self.update("!bot 1"))
+        self.telegram.fail_messages = True
+        with self.assertRaises(APIError):
+            await self.service.tick()
+        self.assertEqual(len(self.telegram.photos), 1)
+        self.assertTrue(self.service.state.session.photo_delivered)
+        self.service = self.build()
+        self.telegram.fail_messages = False
+        await self.service.tick()
+        self.assertEqual(len(self.telegram.photos), 1)
+        self.assertEqual(self.service.state.session.phase, "done")
 
     async def test_resend_after_skip_preserves_skip_confirmation(self):
         await self.service.tick()
@@ -481,7 +532,7 @@ class UnitTests(unittest.TestCase):
                        "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = store.load()
-            self.assertEqual(state.version, 3)
+            self.assertEqual(state.version, 4)
             self.assertEqual(state.dessert_days_used_this_week, 1)
             self.assertNotIn("meat_recipes_chosen_this_week", json.loads(path.read_text(encoding="utf-8")))
 
@@ -492,8 +543,20 @@ class UnitTests(unittest.TestCase):
                       "fetch_day": "", "fetch_attempts": 0, "fetch_retry_at": 0, "version": 2}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 3)
+            self.assertEqual(state.version, 4)
             self.assertEqual(state.sunday_leftovers_day, "")
+
+    def test_version_three_session_migrates_photo_delivery_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            session = Session("2026-09-07", [recipe()], False, "!bot", "de", 60, ["menu"])
+            legacy = asdict(State(session=session))
+            legacy["version"] = 3
+            del legacy["session"]["photo_delivered"]
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            state = StateStore(path).load()
+            self.assertEqual(state.version, 4)
+            self.assertFalse(state.session.photo_delivered)
 
     def test_partial_state_cannot_reset_counters(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -567,7 +630,8 @@ class APITests(unittest.IsolatedAsyncioTestCase):
     def response_recipe(self, vegetarian=True):
         return {"id": 1, "title": "Rice", "vegetarian": vegetarian,
                 "extendedIngredients": [{"original": "100 g rice"}],
-                "instructions": "<p>Cook rice.</p>", "readyInMinutes": 20}
+                "instructions": "<p>Cook rice.</p>", "readyInMinutes": 20,
+                "image": "https://images.example/rice.jpg"}
 
     async def test_current_query_and_cached_details(self):
         def handle(request):
@@ -579,6 +643,7 @@ class APITests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             recipes = await Spoonacular(client, "secret").recipes(1, True)
         self.assertEqual(recipes[0].instructions, ["Cook rice."])
+        self.assertEqual(recipes[0].image_url, "https://images.example/rice.jpg")
 
     async def test_unsafe_missing_or_incomplete_recipes_rejected(self):
         invalid = [self.response_recipe(False), {**self.response_recipe(), "vegetarian": None},
@@ -601,6 +666,16 @@ class APITests(unittest.IsolatedAsyncioTestCase):
                 await Telegram(client, "secret", -123).send("test")
         self.assertEqual(raised.exception.retry_after, 90)
         self.assertNotIn("secret", str(raised.exception))
+
+    async def test_telegram_sends_photo_url_and_caption(self):
+        def handle(request):
+            self.assertTrue(request.url.path.endswith("/sendPhoto"))
+            self.assertEqual(json.loads(request.content), {
+                "chat_id": -123, "photo": "https://images.example/rice.jpg", "caption": "Rice"
+            })
+            return httpx.Response(200, json={"ok": True, "result": {}})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            await Telegram(client, "secret", -123).send_photo("https://images.example/rice.jpg", "Rice")
 
     async def test_network_errors_hide_request_urls(self):
         def handle(request):
