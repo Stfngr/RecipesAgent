@@ -120,6 +120,83 @@ Use a dedicated token; do not share it with another bot application.
 
 ## Raspberry Pi Deployment
 
+### Docker
+
+Every push to `main` runs tests and publishes an ARM64 image for an `aarch64` Pi
+to GitHub Container Registry:
+
+```text
+ghcr.io/stfngr/recipesagent:latest
+ghcr.io/stfngr/recipesagent:main
+ghcr.io/stfngr/recipesagent:sha-<commit>
+```
+
+After first workflow run, open the repository's **Packages** page, select the
+`recipesagent` container package, and set its visibility to **Public**. The Pi
+can then pull it without GitHub credentials. The immutable SHA tag supports a
+specific rollback.
+
+Install Docker Engine using Docker's official instructions for your Pi OS, then
+create the host configuration and persistent state directory:
+
+```bash
+sudo install -d -m 700 /etc/recipe-bot
+sudo install -m 600 .env.example /etc/recipe-bot/.env
+sudo install -m 600 settings.json.example /etc/recipe-bot/settings.json
+sudo chown 10001:10001 /etc/recipe-bot/settings.json
+sudo install -d -o 10001 -g 10001 -m 700 /var/lib/recipe-bot
+sudoedit /etc/recipe-bot/.env
+sudoedit /etc/recipe-bot/settings.json
+```
+
+Start container:
+
+```bash
+sudo docker pull ghcr.io/stfngr/recipesagent:latest
+sudo docker run -d \
+  --name recipe-bot \
+  --restart unless-stopped \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --env-file /etc/recipe-bot/.env \
+  --mount type=bind,src=/etc/recipe-bot/settings.json,dst=/etc/recipe-bot/settings.json,readonly \
+  --mount type=bind,src=/var/lib/recipe-bot,dst=/var/lib/recipe-bot \
+  ghcr.io/stfngr/recipesagent:latest
+```
+
+Inspect logs and status:
+
+```bash
+sudo docker logs -f recipe-bot
+sudo docker ps --filter name=recipe-bot
+```
+
+On each pushed image, update explicitly. The state bind mount remains intact:
+
+```bash
+sudo docker pull ghcr.io/stfngr/recipesagent:latest
+sudo docker rm -f recipe-bot
+sudo docker run -d \
+  --name recipe-bot \
+  --restart unless-stopped \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --env-file /etc/recipe-bot/.env \
+  --mount type=bind,src=/etc/recipe-bot/settings.json,dst=/etc/recipe-bot/settings.json,readonly \
+  --mount type=bind,src=/var/lib/recipe-bot,dst=/var/lib/recipe-bot \
+  ghcr.io/stfngr/recipesagent:latest
+```
+
+To roll back, replace `latest` in the pull and run commands with a published
+`sha-<commit>` tag. Do not run Docker deployment and systemd deployment at the
+same time: both poll Telegram using same bot token.
+
+### Systemd
+
 Install OS packages (these commands require administrator access):
 
 ```bash

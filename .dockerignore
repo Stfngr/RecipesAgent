@@ -1,0 +1,13 @@
+.git/
+.github/
+.env
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+settings.json
+state.json*
+SPEC.md:Zone.Identifier
