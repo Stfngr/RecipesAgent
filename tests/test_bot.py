@@ -243,6 +243,19 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.telegram.photos), 1)
         self.assertEqual(self.service.state.session.phase, "done")
 
+    async def test_rejected_photo_delivers_text_and_is_not_retried(self):
+        await self.service.tick()
+        self.service.state.session.recipes[0].image_url = "https://images.example/recipe.jpg"
+        self.telegram.send_photo = AsyncMock(side_effect=APIError("Telegram sendPhoto", 400))
+        await self.service.handle_update(self.update("!bot 1"))
+        await self.service.tick()
+        self.assertEqual(self.service.state.session.phase, "done")
+        self.assertTrue(self.service.state.session.photo_skipped)
+        self.assertIn("Ausgewaehltes Rezept: Recipe 1", self.telegram.messages[-1])
+        self.service = self.build()
+        await self.service.handle_update(self.update("!bot resend"))
+        self.assertEqual(self.telegram.send_photo.await_count, 1)
+
     async def test_resend_after_skip_preserves_skip_confirmation(self):
         await self.service.tick()
         await self.service.handle_update(self.update("!bot 0"))
@@ -532,7 +545,7 @@ class UnitTests(unittest.TestCase):
                        "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = store.load()
-            self.assertEqual(state.version, 4)
+            self.assertEqual(state.version, 5)
             self.assertEqual(state.dessert_days_used_this_week, 1)
             self.assertNotIn("meat_recipes_chosen_this_week", json.loads(path.read_text(encoding="utf-8")))
 
@@ -543,7 +556,7 @@ class UnitTests(unittest.TestCase):
                       "fetch_day": "", "fetch_attempts": 0, "fetch_retry_at": 0, "version": 2}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 4)
+            self.assertEqual(state.version, 5)
             self.assertEqual(state.sunday_leftovers_day, "")
 
     def test_version_three_session_migrates_photo_delivery_state(self):
@@ -553,10 +566,24 @@ class UnitTests(unittest.TestCase):
             legacy = asdict(State(session=session))
             legacy["version"] = 3
             del legacy["session"]["photo_delivered"]
+            del legacy["session"]["photo_skipped"]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 4)
+            self.assertEqual(state.version, 5)
             self.assertFalse(state.session.photo_delivered)
+            self.assertFalse(state.session.photo_skipped)
+
+    def test_version_four_session_migrates_photo_skip_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            session = Session("2026-09-07", [recipe()], False, "!bot", "de", 60, ["menu"])
+            legacy = asdict(State(session=session))
+            legacy["version"] = 4
+            del legacy["session"]["photo_skipped"]
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            state = StateStore(path).load()
+            self.assertEqual(state.version, 5)
+            self.assertFalse(state.session.photo_skipped)
 
     def test_partial_state_cannot_reset_counters(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -676,6 +703,15 @@ class APITests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json={"ok": True, "result": {}})
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             await Telegram(client, "secret", -123).send_photo("https://images.example/rice.jpg", "Rice")
+
+    async def test_telegram_errors_identify_operation_without_secrets(self):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, json={"description": "Bad Request"})
+        )) as client:
+            with self.assertRaises(APIError) as raised:
+                await Telegram(client, "secret", -123).updates(None)
+        self.assertEqual(str(raised.exception), "Telegram getUpdates request failed (HTTP/API 400)")
+        self.assertNotIn("secret", str(raised.exception))
 
     async def test_network_errors_hide_request_urls(self):
         def handle(request):

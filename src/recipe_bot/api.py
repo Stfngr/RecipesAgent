@@ -101,11 +101,11 @@ class Telegram:
 
     async def call(self, method: str, **payload):
         data = await request_json(
-            self.client, "POST", self.base_url + method, "Telegram", json=payload,
+            self.client, "POST", self.base_url + method, f"Telegram {method}", json=payload,
             timeout=httpx.Timeout(45, connect=10),
         )
         if data.get("ok") is not True or "result" not in data:
-            raise APIError("Telegram", data.get("error_code"))
+            raise APIError(f"Telegram {method}", data.get("error_code"))
         return data["result"]
 
     async def send(self, text: str):

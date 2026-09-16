@@ -229,6 +229,8 @@ delivery succeeds. Permission/token/chat errors therefore require operator actio
 correct credentials/chat permissions, then restart. Monitor journald for repeated
 HTTP/API status codes. Configuration/state failures log only exception type to
 avoid leaking credentials. HTTP request URL logging is disabled for the same reason.
+If Telegram rejects a selected recipe image with HTTP 400, the bot records that
+image as skipped and still delivers recipe text; all other Telegram errors retry.
 
 ## SPEC Corrections
 

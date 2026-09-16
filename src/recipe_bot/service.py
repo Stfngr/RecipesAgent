@@ -121,9 +121,7 @@ class RecipeService:
         if session is None or session.phase not in ("announcing", "delivering", "skipping"):
             return
         if session.phase == "delivering" and not session.photo_delivered:
-            recipe = session.recipes[session.selected_index]
-            if recipe.image_url:
-                await self.telegram.send_photo(recipe.image_url, recipe.title)
+            await self.send_selected_photo(session)
             session.photo_delivered = True
             self.store.save(self.state)
         while session.next_message < len(session.outbox):
@@ -163,12 +161,24 @@ class RecipeService:
                             session.trigger, session.window_minutes)
                     if session.phase in ("announcing", "active") else session.outbox)
         if session.phase in ("delivering", "done"):
-            recipe = session.recipes[session.selected_index]
-            if recipe.image_url:
-                await self.telegram.send_photo(recipe.image_url, recipe.title)
+            await self.send_selected_photo(session)
         for message in messages:
             await self.telegram.send(message)
         log.info("Session output resent: %s", session.day)
+
+    async def send_selected_photo(self, session: Session):
+        recipe = session.recipes[session.selected_index]
+        if not recipe.image_url or session.photo_skipped:
+            return
+        try:
+            await self.telegram.send_photo(recipe.image_url, recipe.title)
+        except APIError as error:
+            # Telegram cannot fetch some external recipe images. Keep recipe text deliverable.
+            if error.status != 400:
+                raise
+            session.photo_skipped = True
+            self.store.save(self.state)
+            log.warning("Recipe photo rejected; delivering text only")
 
     async def notify_no_menu(self):
         message = ("Heute ist keine Rezeptauswahl verfuegbar." if self.settings.interaction_language == "de"
