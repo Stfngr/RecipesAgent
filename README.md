@@ -138,6 +138,30 @@ Bot-Anwendung teilen.
 
 ## Raspberry-Pi-Bereitstellung
 
+### Optional: Home Dashboard
+
+Das separate Projekt `home-dashboard` zeigt das zuletzt gewählte Rezept im
+Heimnetz. In der Bot-Umgebungsdatei beide Werte setzen:
+
+```env
+DASHBOARD_URL="http://home-dashboard-api:8000"
+DASHBOARD_TOKEN="derselbe-token-wie-im-home-dashboard"
+```
+
+Beide Werte müssen gemeinsam gesetzt oder leer sein. Den Bot-Container mit
+`--network bot-network` im selben externen Docker-Netz wie das Dashboard neu
+erstellen; alle bisherigen State-/Konfigurations-Mounts beibehalten. Geänderte
+`--env-file`-Werte erfordern Container-Neuerstellung, nicht nur Neustart.
+
+Manuelle und automatische Auswahlen erzeugen ab Aktivierung einen persistenten
+Dashboard-Auftrag. Menü-Kandidaten, Auslassen und Restesonntage werden nicht
+übertragen. Das letzte Rezept bleibt auch nach Mitternacht sichtbar.
+Es gibt keinen rückwirkenden Import bereits abgeschlossener Auswahlen.
+Fehler werden unabhängig von Telegram wiederholt; eine neuere Auswahl ersetzt
+einen älteren ausstehenden Auftrag. Zeitstempel werden pro Bot monoton gehalten.
+State-Version 6 migriert vorhandene Zustände automatisch und erhält Menüs,
+Zähler und Telegram-Zustellfortschritt. Dashboard-Zugangsdaten stehen nicht im State.
+
 ### Docker
 
 Jeder Push nach `main` fuehrt Tests aus und veroeffentlicht ein ARM64-Image fuer
@@ -480,6 +504,25 @@ Startup removes any existing webhook for this bot, retaining pending updates.
 Use a dedicated token; do not share it with another bot application.
 
 ## Raspberry Pi Deployment
+
+### Optional: Home Dashboard
+
+The separate `home-dashboard` project displays the latest selected recipe on
+your LAN. Set both `DASHBOARD_URL=http://home-dashboard-api:8000` and
+`DASHBOARD_TOKEN` in the bot environment file, using the dashboard's recipe-bot
+token. Leave both empty to disable integration.
+
+Recreate the bot container with `--network bot-network`, retaining all existing
+state/configuration mounts. Both projects use this external Docker network.
+Restarting alone does not reload values supplied through `--env-file`.
+
+Future manual and automatic selections are persisted for background delivery.
+Candidates, skips, and leftovers Sundays do not replace the displayed recipe.
+The last recipe stays visible across midnight; existing completed selections
+are not backfilled. Retries never block Telegram. New selections replace older
+pending updates, with monotonically increasing bot timestamps. State version 6
+automatically migrates existing sessions, counters, and delivery cursors;
+dashboard credentials are never persisted in state.
 
 ### Docker
 

@@ -1,5 +1,5 @@
 from dataclasses import asdict, dataclass, field, fields
-from datetime import date
+from datetime import date, datetime
 import json
 import math
 import os
@@ -8,6 +8,7 @@ import re
 import tempfile
 
 from .recipes import Recipe
+from .dashboard import validate_update
 
 
 def week_key(day: date) -> str:
@@ -76,10 +77,12 @@ class State:
     fetch_attempts: int = 0
     fetch_retry_at: float = 0
     sunday_leftovers_day: str = ""
-    version: int = field(default=5)
+    dashboard_pending: dict | None = None
+    dashboard_updated_at: str = ""
+    version: int = field(default=6)
 
     def __post_init__(self):
-        if self.version != 5:
+        if self.version != 6:
             raise ValueError("Unsupported state version")
         if self.week and not re.fullmatch(r"[0-9]{4}-W[0-9]{2}", self.week):
             raise ValueError("Invalid state week")
@@ -93,6 +96,14 @@ class State:
             raise ValueError("Invalid fetch attempt count")
         if type(self.fetch_retry_at) not in (int, float) or not math.isfinite(self.fetch_retry_at):
             raise ValueError("Invalid fetch retry time")
+        if not isinstance(self.dashboard_updated_at, str):
+            raise ValueError("Invalid dashboard timestamp")
+        if self.dashboard_updated_at and datetime.fromisoformat(self.dashboard_updated_at).tzinfo is None:
+            raise ValueError("Dashboard timestamp must include timezone")
+        if self.dashboard_pending is not None:
+            validate_update(self.dashboard_pending)
+            if self.dashboard_pending["updated_at"] != self.dashboard_updated_at:
+                raise ValueError("Dashboard pending timestamp mismatch")
 
     def reset_week(self, day: date) -> bool:
         week = week_key(day)
@@ -115,7 +126,8 @@ class StateStore:
         if not isinstance(data, dict):
             raise ValueError("Incomplete or unsupported state file")
         current_fields = {item.name for item in fields(State)}
-        version_two_fields = current_fields - {"sunday_leftovers_day"}
+        version_five_fields = current_fields - {"dashboard_pending", "dashboard_updated_at"}
+        version_two_fields = version_five_fields - {"sunday_leftovers_day"}
         version_one_fields = version_two_fields | {"meat_recipes_chosen_this_week"}
         migrated = False
         if data.get("version") == 1 and set(data) == version_one_fields:
@@ -129,15 +141,20 @@ class StateStore:
             data["sunday_leftovers_day"] = ""
             data["version"] = 3
             migrated = True
-        if data.get("version") == 3 and set(data) == current_fields:
+        if data.get("version") == 3 and set(data) == version_five_fields:
             if data["session"] is not None:
                 data["session"].setdefault("photo_delivered", False)
             data["version"] = 4
             migrated = True
-        if data.get("version") == 4 and set(data) == current_fields:
+        if data.get("version") == 4 and set(data) == version_five_fields:
             if data["session"] is not None:
                 data["session"].setdefault("photo_skipped", False)
             data["version"] = 5
+            migrated = True
+        if data.get("version") == 5 and set(data) == version_five_fields:
+            data["dashboard_pending"] = None
+            data["dashboard_updated_at"] = ""
+            data["version"] = 6
             migrated = True
         if set(data) != current_fields:
             raise ValueError("Incomplete or unsupported state file")

@@ -6,6 +6,7 @@ import time
 
 from .api import APIError, Spoonacular, Telegram
 from .config import Settings, WEEKDAYS
+from .dashboard import Dashboard, selection_update
 from .recipes import details, is_resend_command, is_skip_command, parse_selection, skipped, summary
 from .state import Session, StateStore
 
@@ -14,7 +15,7 @@ log = logging.getLogger(__name__)
 
 class RecipeService:
     def __init__(self, settings: Settings, store: StateStore, recipes: Spoonacular,
-                 telegram: Telegram, clock=time.time, rng=None):
+                 telegram: Telegram, clock=time.time, rng=None, dashboard: Dashboard | None = None):
         self.settings = settings
         self.store = store
         self.state = store.load()
@@ -27,6 +28,8 @@ class RecipeService:
         self.telegram_retry_at = 0.0
         self.send_lock = asyncio.Lock()
         self.resends = asyncio.Queue(maxsize=32)
+        self.dashboard = dashboard
+        self.dashboard_changed = asyncio.Event()
 
     def record_telegram_failure(self, error: APIError):
         if error.status != 400:
@@ -165,7 +168,14 @@ class RecipeService:
         session.phase = "delivering"
         session.outbox = details(recipe, session.language, automatic)
         session.next_message = 0
+        if self.dashboard:
+            update = selection_update(recipe, session.day, automatic, self.clock(),
+                                      self.state.dashboard_updated_at)
+            self.state.dashboard_pending = update
+            self.state.dashboard_updated_at = update["updated_at"]
         self.store.save(self.state)
+        if self.dashboard:
+            self.dashboard_changed.set()
         log.info("%s selection: recipe %s", "Timeout" if automatic else "User", recipe.id)
 
     def skip(self):
@@ -286,6 +296,29 @@ class RecipeService:
                 log.warning("%s; poll retry in %.0fs", error, error.retry_after)
                 await asyncio.sleep(error.retry_after)
 
+    async def publish_dashboard(self):
+        # Snapshot identity prevents an old acknowledgement from clearing a newer
+        # selection. No network await holds the session lock.
+        pending = self.state.dashboard_pending
+        if self.dashboard is None or pending is None:
+            return
+        await self.dashboard.publish(pending)
+        if self.state.dashboard_pending is pending:
+            self.state.dashboard_pending = None
+            self.store.save(self.state)
+
+    async def dashboard_worker(self):
+        while True:
+            self.dashboard_changed.clear()
+            try:
+                await self.publish_dashboard()
+            except APIError as error:
+                log.warning("%s; dashboard retry in %.0fs", error, error.retry_after)
+                await asyncio.sleep(error.retry_after)
+                continue
+            if self.state.dashboard_pending is None:
+                await self.dashboard_changed.wait()
+
     async def run(self):
         # Existing webhook must not compete with long polling. Retain pending messages for recovery.
         while True:
@@ -298,6 +331,8 @@ class RecipeService:
                 await asyncio.sleep(error.retry_after)
         tasks = [asyncio.create_task(self.scheduler()), asyncio.create_task(self.listen()),
                  asyncio.create_task(self.resend_worker())]
+        if self.dashboard:
+            tasks.append(asyncio.create_task(self.dashboard_worker()))
         try:
             await asyncio.gather(*tasks)
         finally:

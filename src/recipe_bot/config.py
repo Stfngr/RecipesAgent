@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import time
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -72,12 +73,19 @@ class Credentials:
     telegram_token: str = field(repr=False)
     chat_id: int
     spoonacular_key: str = field(repr=False)
+    dashboard_url: str | None = None
+    dashboard_token: str | None = field(default=None, repr=False)
 
 
 def load_config(settings_path: Path, env_path: Path) -> tuple[Settings, Credentials]:
     names = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SPOONACULAR_API_KEY")
-    if not all(os.environ.get(name) for name in names):
+    # A service EnvironmentFile may be unreadable to the service user. Otherwise
+    # load optional settings too, without overriding exported environment values.
+    try:
         load_dotenv(env_path)
+    except PermissionError:
+        if not all(os.environ.get(name) for name in names):
+            raise
     with settings_path.open(encoding="utf-8") as file:
         settings = Settings(**json.load(file))
     values = [os.environ.get(name, "").strip() for name in names]
@@ -89,4 +97,15 @@ def load_config(settings_path: Path, env_path: Path) -> tuple[Settings, Credenti
         raise ValueError("Invalid TELEGRAM_BOT_TOKEN format")
     if not re.fullmatch(r"-?[0-9]+", chat_id) or int(chat_id) == 0:
         raise ValueError("TELEGRAM_CHAT_ID must be a nonzero numeric chat ID")
-    return settings, Credentials(token, int(chat_id), key)
+    dashboard_url = os.environ.get("DASHBOARD_URL", "").strip() or None
+    dashboard_token = os.environ.get("DASHBOARD_TOKEN", "").strip() or None
+    if bool(dashboard_url) != bool(dashboard_token):
+        raise ValueError("Set both DASHBOARD_URL and DASHBOARD_TOKEN, or neither")
+    if dashboard_url:
+        parsed = urlsplit(dashboard_url)
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
+                or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
+            raise ValueError("DASHBOARD_URL must be an HTTP(S) origin without credentials")
+        if not dashboard_token.isascii() or any(char.isspace() for char in dashboard_token):
+            raise ValueError("Invalid DASHBOARD_TOKEN")
+    return settings, Credentials(token, int(chat_id), key, dashboard_url, dashboard_token)

@@ -686,7 +686,7 @@ class UnitTests(unittest.TestCase):
                        "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = store.load()
-            self.assertEqual(state.version, 5)
+            self.assertEqual(state.version, 6)
             self.assertEqual(state.dessert_days_used_this_week, 1)
             self.assertNotIn("meat_recipes_chosen_this_week", json.loads(path.read_text(encoding="utf-8")))
 
@@ -697,7 +697,7 @@ class UnitTests(unittest.TestCase):
                       "fetch_day": "", "fetch_attempts": 0, "fetch_retry_at": 0, "version": 2}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 5)
+            self.assertEqual(state.version, 6)
             self.assertEqual(state.sunday_leftovers_day, "")
 
     def test_version_three_session_migrates_photo_delivery_state(self):
@@ -706,11 +706,13 @@ class UnitTests(unittest.TestCase):
             session = Session("2026-09-07", [recipe()], False, "!bot", "de", 60, ["menu"])
             legacy = asdict(State(session=session))
             legacy["version"] = 3
+            del legacy["dashboard_pending"]
+            del legacy["dashboard_updated_at"]
             del legacy["session"]["photo_delivered"]
             del legacy["session"]["photo_skipped"]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 5)
+            self.assertEqual(state.version, 6)
             self.assertFalse(state.session.photo_delivered)
             self.assertFalse(state.session.photo_skipped)
 
@@ -720,10 +722,12 @@ class UnitTests(unittest.TestCase):
             session = Session("2026-09-07", [recipe()], False, "!bot", "de", 60, ["menu"])
             legacy = asdict(State(session=session))
             legacy["version"] = 4
+            del legacy["dashboard_pending"]
+            del legacy["dashboard_updated_at"]
             del legacy["session"]["photo_skipped"]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 5)
+            self.assertEqual(state.version, 6)
             self.assertFalse(state.session.photo_skipped)
 
     def test_partial_state_cannot_reset_counters(self):

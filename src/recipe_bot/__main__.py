@@ -9,6 +9,7 @@ import httpx
 
 from .api import Spoonacular, Telegram
 from .config import load_config
+from .dashboard import Dashboard
 from .service import RecipeService
 from .state import StateStore
 
@@ -20,6 +21,8 @@ async def run(settings, credentials, state_path):
         service = RecipeService(
             settings, StateStore(state_path), Spoonacular(client, credentials.spoonacular_key),
             Telegram(client, credentials.telegram_token, credentials.chat_id),
+            dashboard=(Dashboard(client, credentials.dashboard_url, credentials.dashboard_token)
+                       if credentials.dashboard_url else None),
         )
         task = asyncio.create_task(service.run())
         loop = asyncio.get_running_loop()
