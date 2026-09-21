@@ -15,7 +15,7 @@ The goal of this project is to build an autonomous, resource-efficient Telegram 
   * `python-dotenv`
   * `APScheduler` or native `cron` / `asyncio` loop for time-based triggers
 * **Recipe API:** Spoonacular REST API
-* **Language Support:** English & German for chat interactions; Recipe content fetched in German.
+* **Language Support:** English & German for chat interactions; recipe content fetched in English.
 
 ---
 
@@ -36,7 +36,7 @@ Stores application parameters that govern business logic:
   "recipes_per_day": 5,
   "start_time": "08:00",
   "active_window_minutes": 60,
-  "language": "de",
+  "language": "en",
   "trigger_codeword": "!bot",
   "vegetarian_days": ["monday", "friday"],
   "dessert_days_per_week": 2,
@@ -84,7 +84,7 @@ Tracks weekly limits and reset timers across restarts:
 [Check Weekly Constraints & Reset State if New Week]
         │
         ▼
-[Fetch X Recipes from Spoonacular (German)]
+[Fetch X Recipes from Spoonacular (English)]
         │
         ▼
 [Send Summary List & Dessert Status (YES/NO) to Telegram]
@@ -111,7 +111,7 @@ Tracks weekly limits and reset timers across restarts:
 ### 5.1 Stage 1: Scheduled Trigger
 1. At `start_time` (e.g., 08:00), the bot initializes a new selection session.
 2. Evaluates fixed vegetarian-day and dessert constraints for the current day.
-3. Calls Spoonacular API (`/recipes/random`) fetching `recipes_per_day` items in German (`language=de`).
+3. Calls Spoonacular API (`/recipes/random`) fetching `recipes_per_day` items in English.
 4. Format and post the summary list to Telegram:
    > 🤖 **Heutige Rezeptauswahl:**
    > 1. Gemüselasagne

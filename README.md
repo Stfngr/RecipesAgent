@@ -30,16 +30,14 @@ Cron, eingehender Port, Webhook-Server oder LLM erforderlich.
 - `sunday_leftovers` auf `true` setzen, um sonntags keine Rezepte anzufordern
   und stattdessen `Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)`
   zu senden.
-- Rezepttitel, Zutaten und Anweisungen bleiben **Englisch**, sofern keine
-  optionalen Lara-Translate-Zugangsdaten konfiguriert sind. Bot-Nachrichten
+- Rezepttitel, Zutaten und Anweisungen bleiben **Englisch**. Bot-Nachrichten
   unterstuetzen Deutsch und Englisch unabhaengig davon.
 
 ## Voraussetzungen
 
-Linux, Python 3.10+, Zeitzonendatenbank (`tzdata`), Telegram-Bot-Token und
-numerische Chat-ID sowie Spoonacular-API-Schluessel. Lara-Translate-
-Zugangsdaten sind fuer deutsche Rezeptuebersetzungen optional. Raspberry Pi OS
-Lite mit Python 3.11+ wird empfohlen.
+Linux, Python 3.10+, Zeitzonendatenbank (`tzdata`), Telegram-Bot-Token,
+numerische Chat-ID und Spoonacular-API-Schluessel. Raspberry Pi OS Lite mit
+Python 3.11+ wird empfohlen.
 
 Laufzeitabhaengigkeiten sind nur `httpx` und `python-dotenv` samt deren
 Abhaengigkeiten. Direkte Aufrufe der Telegram Bot API vermeiden ein zusaetzliches
@@ -62,12 +60,6 @@ chmod 600 .env
 `.env` mit echten Zugangsdaten und `settings.json` mit den gewuenschten Regeln
 konfigurieren. `TELEGRAM_CHAT_ID` muss eine numerische ID sein (bei Gruppen
 negativ), kein Gruppenname. Umgebungsvariablen haben Vorrang vor `.env`.
-
-`LARA_ACCESS_KEY_ID` und `LARA_ACCESS_KEY_SECRET` beide setzen, um Rezepttitel,
-Zutaten und Anweisungen von Englisch nach Deutsch zu uebersetzen. Beide nicht
-setzen, um englische Rezeptinhalte zu behalten. Lara-Zugangsdaten werden in den
-API-Einstellungen von Lara Translate erstellt; niemals einen der Werte einchecken.
-Nur einen der beiden Werte zu setzen ist ein Konfigurationsfehler.
 
 ```bash
 .venv/bin/recipe-bot
@@ -312,10 +304,10 @@ kann die Nachricht bei Wiederholung duplizieren. Logische Auswahl und Zaehler
 sind idempotent; Telegram-Zustellung ist mindestens einmalig.
 
 Netzwerkfehler werden mit Verzogerung wiederholt; Telegram-Ratenlimits beachten
-`retry_after`. Fehlgeschlagene Spoonacular-Anfragen und Lara-Uebersetzungen senden
-einen sicheren Telegram-Hinweis mit Dienst, optionalem HTTP/API-Status und
-Wiederholungsergebnis. Wenn Telegram selbst nicht verfuegbar ist, wird der
-Hinweisfehler protokolliert und ersetzt den urspruenglichen Fehler nicht.
+`retry_after`. Fehlgeschlagene Spoonacular-Anfragen senden einen sicheren
+Telegram-Hinweis mit Dienst, optionalem HTTP/API-Status und Wiederholungsergebnis.
+Wenn Telegram selbst nicht verfuegbar ist, wird der Hinweisfehler protokolliert
+und ersetzt den urspruenglichen Fehler nicht.
 Hoechstens **drei kostenpflichtige Rezeptabrufversuche pro lokalem Tag** werden
 ueber Neustarts hinweg persistiert, mit mindestens fuenf Minuten Abstand zwischen
 fehlgeschlagenen Versuchen. Authentifizierungs- und Quotenfehler stoppen
@@ -324,13 +316,6 @@ Anweisungen), doppelte Rezepte oder verletzte Vegetarisch-Filter werden
 abgewiesen; es gibt keinen Fallback, der Ernaehrungsvorgaben abschwaecht.
 Fehlgeschlagene Tage werden protokolliert und am naechsten Tag wiederholt, ohne
 Menuequoten zu verbrauchen.
-
-Wenn Lara-Zugangsdaten konfiguriert sind, wird jeder Rezeptkandidat uebersetzt,
-bevor das Menue gespeichert oder angekuendigt wird. Ein Lara-Fehler erzeugt kein
-Menue und folgt demselben Wiederholungspfad wie ein Rezeptabruf-Fehler; der
-englische Fallback ist absichtlich deaktiviert. Uebersetzungswiederholungen
-benoetigen einen neuen Spoonacular-Abruf und verwenden deshalb dasselbe Tageslimit
-von drei Abrufen.
 
 Telegram-Sendefehler behalten die ausstehende Outbox und blockieren neue Sitzungen,
 bis die Zustellung gelingt. Berechtigungs-, Token- oder Chatfehler erfordern daher
@@ -348,9 +333,7 @@ Vom Nutzer bestaetigte Entscheidungen und aktuelle API-Dokumentation haben
 Vorrang vor der urspruenglichen SPEC:
 
 - Spoonacular unterstuetzt keinen deutschen Rezeptabruf, daher wird kein
-  irrefuehrender `language=de`-Request gesendet. Optionale Lara-Translate-
-  Integration uebersetzt Rezeptinhalte bei Konfiguration nach Deutsch; sonst
-  bleiben sie Englisch.
+  irrefuehrender `language=de`-Request gesendet und Rezeptinhalte bleiben Englisch.
 - Der aktuelle Random-Endpunkt verwendet `include-tags`, nicht das veraltete
   `tags` der SPEC.
 - Der Hauptgericht-Filter schliesst reine Dessertmenues aus; das
@@ -388,15 +371,13 @@ No cron, inbound port, webhook server, or LLM needed.
   Downtime and New Year are handled on startup. Counts belong to the menu date.
 - Set `sunday_leftovers` to `true` to skip recipe requests on Sunday and send
   `Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)` instead.
-- Recipe titles, ingredients, and instructions remain **English** unless optional
-  Lara Translate credentials are configured. Bot messages support German and English
-  independently.
+- Recipe titles, ingredients, and instructions remain **English**. Bot messages
+  support German and English independently.
 
 ## Requirements
 
-Linux, Python 3.10+, timezone database (`tzdata`), Telegram bot token and numeric
-chat ID, Spoonacular API key. Lara Translate credentials are optional for German
-recipe translation. Raspberry Pi OS Lite with Python 3.11+ recommended.
+Linux, Python 3.10+, timezone database (`tzdata`), Telegram bot token, numeric
+chat ID, and Spoonacular API key. Raspberry Pi OS Lite with Python 3.11+ recommended.
 
 Runtime dependencies are only `httpx` and `python-dotenv` (plus their dependencies).
 Direct Telegram Bot API calls avoid an additional framework and scheduler.
@@ -418,11 +399,6 @@ chmod 600 .env
 Configure `.env` with real credentials and `settings.json` with desired rules.
 `TELEGRAM_CHAT_ID` must be a numeric ID (negative for groups), not a group name.
 Environment variables take precedence over `.env`.
-
-Set both `LARA_ACCESS_KEY_ID` and `LARA_ACCESS_KEY_SECRET` to translate recipe
-titles, ingredients, and instructions from English to German. Leave both unset to
-keep English recipe content. Lara credentials are created in Lara Translate's API
-settings; never commit either value. Setting only one is a configuration error.
 
 ```bash
 .venv/bin/recipe-bot
@@ -653,21 +629,15 @@ message, but before local acknowledgement, can duplicate that message on retry.
 Logical selections and counters are idempotent; Telegram delivery is at-least-once.
 
 Network errors retry with delay; Telegram rate limits honor `retry_after`.
-Failed Spoonacular requests and Lara translations send a safe Telegram alert with
-the service, optional HTTP/API status, and retry outcome. If Telegram itself is
-unavailable, the alert failure is logged and does not replace the original retry.
+Failed Spoonacular requests send a safe Telegram alert with the service, optional
+HTTP/API status, and retry outcome. If Telegram itself is unavailable, the alert
+failure is logged and does not replace the original retry.
 At most **three paid recipe fetch attempts per local day**, persisted across
 restarts, with at least five minutes between failed attempts. Auth/quota errors
 stop recipe fetches for that date. Incomplete batches (including missing
 instructions), duplicate recipes, or violated vegetarian filters are rejected;
 there is no fallback that weakens dietary constraints. Failed days are logged
 and retried the next day without consuming menu quotas.
-
-When Lara credentials are configured, every recipe candidate is translated before
-the menu is saved or announced. A Lara failure creates no menu and follows the same
-retry path as a recipe-fetch failure; English fallback is deliberately disabled.
-Translation retries require a fresh Spoonacular request and therefore use the same
-three-attempt daily fetch budget.
 
 Telegram send failures retain the pending outbox and block newer sessions until
 delivery succeeds. Permission/token/chat errors therefore require operator action:
@@ -682,8 +652,7 @@ image as skipped and still delivers recipe text; all other Telegram errors retry
 User-approved choices and current API documentation supersede original SPEC:
 
 - Spoonacular does not support German recipe retrieval, so no misleading
-  `language=de` request is sent. Optional Lara Translate API integration translates
-  recipe content to German when configured; otherwise it remains English.
+  `language=de` request is sent and recipe content remains English.
 - Current random endpoint uses `include-tags`, not the SPEC's legacy `tags`.
   Main-course filter excludes dessert-only menus; vegetarian flag is verified locally.
 - Random recipe responses already contain full details; no second request needed.
