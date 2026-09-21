@@ -24,6 +24,27 @@ class RecipeService:
         self.rng = rng or random.Random()
         self.lock = asyncio.Lock()
         self.retry_at = 0.0
+        self.telegram_retry_at = 0.0
+        self.send_lock = asyncio.Lock()
+        self.resends = asyncio.Queue(maxsize=32)
+
+    def record_telegram_failure(self, error: APIError):
+        if error.status != 400:
+            self.telegram_retry_at = max(self.telegram_retry_at, self.clock() + error.retry_after)
+
+    async def send_telegram(self, method, *args):
+        delay = self.telegram_retry_at - self.clock()
+        if delay > 0:
+            raise APIError("Telegram cooldown", retry_after=delay)
+        # Never wait for another network request while holding the session lock.
+        if self.send_lock.locked():
+            raise APIError("Telegram sender busy", retry_after=1)
+        async with self.send_lock:
+            try:
+                await method(*args)
+            except APIError as error:
+                self.record_telegram_failure(error)
+                raise
 
     def local_now(self):
         return datetime.fromtimestamp(self.clock(), self.settings.zone)
@@ -36,11 +57,11 @@ class RecipeService:
     async def tick(self):
         async with self.lock:
             self.reset_week()
-            if self.clock() < self.retry_at:
-                return
             session = self.state.session
             if session and session.phase == "active" and self.clock() >= session.deadline:
                 self.resolve(self.rng.randrange(len(session.recipes)), automatic=True)
+            if self.clock() < self.retry_at:
+                return
             if session and session.phase in ("announcing", "delivering", "skipping"):
                 await self.deliver()
             now = self.local_now()
@@ -83,7 +104,7 @@ class RecipeService:
             log.warning("Recipe fetch crossed midnight; skipping stale menu")
             return
         needed = max(0, self.settings.dessert_days_per_week - self.state.dessert_days_used_this_week)
-        remaining = 7 - now.weekday()
+        remaining = 7 - now.weekday() - int(self.settings.sunday_leftovers)
         dessert = needed > 0 and (needed >= remaining or self.rng.random() < needed / remaining)
         self.state.session = Session(
             day=now.date().isoformat(), recipes=recipes, dessert=dessert,
@@ -103,12 +124,14 @@ class RecipeService:
         else:
             outcome = "No more attempts today." if exhausted else "Retrying in at least 5 minutes."
         try:
-            await self.telegram.send(f"{error}. {outcome}")
+            await self.send_telegram(self.telegram.send, f"{error}. {outcome}")
         except APIError as notification_error:
             log.warning("Could not send recipe failure alert: %s", notification_error)
 
     async def send_sunday_leftovers(self, day: str):
-        await self.telegram.send("Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)")
+        await self.send_telegram(
+            self.telegram.send, "Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)"
+        )
         self.state.sunday_leftovers_day = day
         self.store.save(self.state)
         log.info("Sunday leftovers message sent: %s", day)
@@ -122,7 +145,7 @@ class RecipeService:
             session.photo_delivered = True
             self.store.save(self.state)
         while session.next_message < len(session.outbox):
-            await self.telegram.send(session.outbox[session.next_message])
+            await self.send_telegram(self.telegram.send, session.outbox[session.next_message])
             session.next_message += 1
             self.store.save(self.state)
         if session.phase == "announcing":
@@ -153,22 +176,46 @@ class RecipeService:
         self.store.save(self.state)
         log.info("User skipped selection")
 
-    async def resend_menu(self, session: Session):
+    def resend_menu(self, session: Session):
         messages = (summary(session.recipes, session.dessert, session.language,
                             session.trigger, session.window_minutes)
                     if session.phase in ("announcing", "active") else session.outbox)
-        if session.phase in ("delivering", "done"):
-            await self.send_selected_photo(session)
-        for message in messages:
-            await self.telegram.send(message)
-        log.info("Session output resent: %s", session.day)
+        photo_session = session if session.phase in ("delivering", "done") else None
+        self.enqueue_resend(list(messages), photo_session)
+
+    def enqueue_resend(self, messages: list[str], photo_session: Session | None = None):
+        try:
+            self.resends.put_nowait((messages, photo_session))
+        except asyncio.QueueFull:
+            log.warning("Resend queue full; ignoring additional request")
+
+    async def retry_resend(self, operation, *args):
+        while True:
+            try:
+                await operation(*args)
+                return
+            except APIError as error:
+                log.warning("%s; resend retry in %.0fs", error, error.retry_after)
+                await asyncio.sleep(error.retry_after)
+
+    async def resend_worker(self):
+        while True:
+            messages, photo_session = await self.resends.get()
+            try:
+                if photo_session:
+                    await self.retry_resend(self.send_selected_photo, photo_session)
+                for message in messages:
+                    await self.retry_resend(self.send_telegram, self.telegram.send, message)
+                log.info("Requested output resent")
+            finally:
+                self.resends.task_done()
 
     async def send_selected_photo(self, session: Session):
         recipe = session.recipes[session.selected_index]
         if not recipe.image_url or session.photo_skipped:
             return
         try:
-            await self.telegram.send_photo(recipe.image_url, recipe.title)
+            await self.send_telegram(self.telegram.send_photo, recipe.image_url, recipe.title)
         except APIError as error:
             # Telegram cannot fetch some external recipe images. Keep recipe text deliverable.
             if error.status != 400:
@@ -177,10 +224,10 @@ class RecipeService:
             self.store.save(self.state)
             log.warning("Recipe photo rejected; delivering text only")
 
-    async def notify_no_menu(self):
+    def notify_no_menu(self):
         message = ("Heute ist keine Rezeptauswahl verfuegbar." if self.settings.interaction_language == "de"
                    else "No recipe menu is available today.")
-        await self.telegram.send(message)
+        self.enqueue_resend([message])
 
     async def handle_update(self, update: dict):
         message = update.get("message", {})
@@ -197,9 +244,9 @@ class RecipeService:
             self.reset_week()
             if is_resend_command(text, trigger):
                 if session and session.day == self.local_now().date().isoformat():
-                    await self.resend_menu(session)
+                    self.resend_menu(session)
                 else:
-                    await self.notify_no_menu()
+                    self.notify_no_menu()
                 return
             if not session or session.phase != "active":
                 return
@@ -235,6 +282,7 @@ class RecipeService:
                     await self.handle_update(update)
                     offset = update["update_id"] + 1
             except APIError as error:
+                self.record_telegram_failure(error)
                 log.warning("%s; poll retry in %.0fs", error, error.retry_after)
                 await asyncio.sleep(error.retry_after)
 
@@ -245,9 +293,11 @@ class RecipeService:
                 await self.telegram.call("deleteWebhook", drop_pending_updates=False)
                 break
             except APIError as error:
+                self.record_telegram_failure(error)
                 log.warning("%s; startup retry in %.0fs", error, error.retry_after)
                 await asyncio.sleep(error.retry_after)
-        tasks = [asyncio.create_task(self.scheduler()), asyncio.create_task(self.listen())]
+        tasks = [asyncio.create_task(self.scheduler()), asyncio.create_task(self.listen()),
+                 asyncio.create_task(self.resend_worker())]
         try:
             await asyncio.gather(*tasks)
         finally:

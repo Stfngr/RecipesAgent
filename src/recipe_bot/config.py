@@ -51,6 +51,8 @@ class Settings:
             raise ValueError("interaction_language must be en or de")
         if type(self.sunday_leftovers) is not bool:
             raise ValueError("sunday_leftovers must be true or false")
+        if self.sunday_leftovers and self.dessert_days_per_week > 6:
+            raise ValueError("dessert_days_per_week must be at most 6 with sunday_leftovers")
         if not isinstance(self.trigger_codeword, str) or not re.fullmatch(
             r"\S{1,32}", self.trigger_codeword
         ):

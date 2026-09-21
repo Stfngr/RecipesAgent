@@ -81,6 +81,15 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         return {"message": {"chat": {"id": chat}, "text": text,
                             "date": int(self.now if sent_at is None else sent_at)}}
 
+    async def resend(self):
+        await self.service.handle_update(self.update("!bot resend"))
+        worker = asyncio.create_task(self.service.resend_worker())
+        try:
+            await asyncio.wait_for(self.service.resends.join(), timeout=1)
+        finally:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
     async def test_schedule_and_selection(self):
         self.now -= 1
         await self.service.tick()
@@ -144,17 +153,131 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_resend_rebuilds_current_menu_without_fetching(self):
         await self.service.tick()
         original_menu = self.telegram.messages.copy()
-        await self.service.handle_update(self.update("!bot resend"))
+        await self.resend()
         self.assertEqual(self.telegram.messages, original_menu * 2)
         self.assertEqual(len(self.api.filters), 1)
         self.assertEqual(self.service.state.session.phase, "active")
+
+    async def test_resend_failure_does_not_block_next_selection(self):
+        self.settings = Settings(recipes_per_day=2, active_window_minutes=1)
+        self.service = self.build()
+        await self.service.tick()
+        sleeping = asyncio.Event()
+        release = asyncio.Event()
+
+        async def sleep(delay):
+            self.assertEqual(delay, 90)
+            sleeping.set()
+            await release.wait()
+
+        self.telegram.send = AsyncMock(side_effect=[APIError("Telegram", 429, 90), None])
+        async def updates(offset):
+            if offset is None:
+                return [dict(self.update("!bot resend"), update_id=10)]
+            if offset == 11:
+                await sleeping.wait()
+                return [dict(self.update("!bot 2"), update_id=11)]
+            raise asyncio.CancelledError
+
+        self.telegram.updates = AsyncMock(side_effect=updates)
+        with patch("recipe_bot.service.asyncio.sleep", side_effect=sleep):
+            worker = asyncio.create_task(self.service.resend_worker())
+            try:
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(self.service.listen(), timeout=1)
+                self.assertEqual(self.telegram.updates.call_args.args, (12,))
+                self.assertEqual(self.store.load().session.selected_index, 1)
+                self.assertEqual(self.telegram.send.await_count, 1)
+                with self.assertRaises(APIError):
+                    await self.service.tick()
+                self.assertEqual(self.telegram.send.await_count, 1)
+                self.now += 90
+                release.set()
+                await asyncio.wait_for(self.service.resends.join(), timeout=1)
+                self.assertEqual(self.telegram.send.await_count, 2)
+                self.assertIn("Heutige Rezeptauswahl", self.telegram.send.call_args.args[0])
+                self.assertEqual(self.store.load().session.selected_index, 1)
+            finally:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+
+    async def test_inflight_resend_does_not_hold_selection_lock(self):
+        await self.service.tick()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def send(text):
+            started.set()
+            await release.wait()
+
+        self.telegram.send = AsyncMock(side_effect=send)
+        await self.service.handle_update(self.update("!bot resend"))
+        worker = asyncio.create_task(self.service.resend_worker())
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1)
+            await asyncio.wait_for(self.service.handle_update(self.update("!bot 2")), timeout=1)
+            with self.assertRaises(APIError):
+                await asyncio.wait_for(self.service.tick(), timeout=1)
+            self.assertEqual(self.store.load().session.selected_index, 1)
+            self.assertEqual(self.telegram.send.await_count, 1)
+            release.set()
+            await asyncio.wait_for(self.service.resends.join(), timeout=1)
+        finally:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+    async def test_scheduled_failure_blocks_resends_photos_and_alerts(self):
+        self.telegram.send = AsyncMock(side_effect=[APIError("Telegram", 429, 90), None])
+        with self.assertRaises(APIError):
+            await self.service.tick()
+        await self.service.notify_fetch_failure(APIError("Spoonacular", 500))
+        with self.assertRaises(APIError):
+            await self.service.send_telegram(self.telegram.send, "resend")
+        with self.assertRaises(APIError):
+            await self.service.send_telegram(self.telegram.send_photo, "url", "caption")
+        self.assertEqual(self.telegram.send.await_count, 1)
+        self.assertEqual(self.telegram.photos, [])
+        self.service.record_telegram_failure(APIError("Telegram", 429, 5))
+        self.assertEqual(self.service.telegram_retry_at, self.now + 90)
+        self.now += 90
+        await self.service.tick()
+        self.assertEqual(self.telegram.send.await_count, 2)
+
+    async def test_deadline_resolves_during_delivery_cooldown(self):
+        await self.service.tick()
+        self.service.retry_at = self.service.state.session.deadline + 90
+        self.now = self.service.state.session.deadline
+        await self.service.tick()
+        self.assertEqual(self.store.load().session.phase, "delivering")
+
+    async def test_resend_retry_keeps_completed_message_cursor(self):
+        self.service.enqueue_resend(["first", "second"])
+        self.telegram.send = AsyncMock(side_effect=[None, APIError("Telegram", 429, 90), None])
+
+        async def sleep(delay):
+            self.now += delay
+
+        with patch("recipe_bot.service.asyncio.sleep", side_effect=sleep):
+            worker = asyncio.create_task(self.service.resend_worker())
+            try:
+                await asyncio.wait_for(self.service.resends.join(), timeout=1)
+            finally:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+        self.assertEqual([call.args[0] for call in self.telegram.send.call_args_list],
+                         ["first", "second", "second"])
+
+    async def test_resend_queue_is_bounded(self):
+        for _ in range(self.service.resends.maxsize + 1):
+            await self.service.handle_update(self.update("!bot resend"))
+        self.assertEqual(self.service.resends.qsize(), self.service.resends.maxsize)
 
     async def test_resend_after_selection_preserves_completed_session(self):
         await self.service.tick()
         await self.service.handle_update(self.update("!bot 1"))
         await self.service.tick()
         selected_messages = self.telegram.messages[1:].copy()
-        await self.service.handle_update(self.update("!bot resend"))
+        await self.resend()
         self.assertEqual(self.telegram.messages[-len(selected_messages):], selected_messages)
         self.assertIn("Ausgewaehltes Rezept: Recipe 1", self.telegram.messages[-1])
         self.assertEqual(self.service.state.session.phase, "done")
@@ -171,7 +294,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             "photo", "https://images.example/recipe.jpg", "Recipe 1"
         ))
         self.assertIn("Ausgewaehltes Rezept: Recipe 1", self.telegram.deliveries[1][1])
-        await self.service.handle_update(self.update("!bot resend"))
+        await self.resend()
         self.assertEqual(self.telegram.deliveries[-2], (
             "photo", "https://images.example/recipe.jpg", "Recipe 1"
         ))
@@ -210,14 +333,14 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.service.state.session.photo_skipped)
         self.assertIn("Ausgewaehltes Rezept: Recipe 1", self.telegram.messages[-1])
         self.service = self.build()
-        await self.service.handle_update(self.update("!bot resend"))
+        await self.resend()
         self.assertEqual(self.telegram.send_photo.await_count, 1)
 
     async def test_resend_after_skip_preserves_skip_confirmation(self):
         await self.service.tick()
         await self.service.handle_update(self.update("!bot 0"))
         await self.service.tick()
-        await self.service.handle_update(self.update("!bot resend"))
+        await self.resend()
         self.assertEqual(self.telegram.messages[-1], "Keine Auswahl fuer heute. Bis morgen.")
         self.assertEqual(self.service.state.session.phase, "skipped")
         self.assertEqual(len(self.api.filters), 1)
@@ -225,7 +348,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_resend_for_old_menu_reports_no_current_menu(self):
         await self.service.tick()
         self.now += 86400
-        await self.service.handle_update(self.update("!bot resend"))
+        await self.resend()
         self.assertEqual(self.telegram.messages[-1], "Heute ist keine Rezeptauswahl verfuegbar.")
         self.assertEqual(len(self.api.filters), 1)
 
@@ -266,7 +389,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.now = self.service.state.session.deadline
         await self.service.tick()
         selected_messages = self.telegram.messages[1:].copy()
-        await self.service.handle_update(self.update("!bot resend"))
+        await self.resend()
         self.assertEqual(self.telegram.messages[-len(selected_messages):], selected_messages)
         self.assertIn("Automatische Auswahl", self.telegram.messages[-1])
         self.assertEqual(self.service.state.session.phase, "done")
@@ -353,6 +476,28 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.tick()
         self.assertEqual(self.api.filters[-1], True)
 
+    async def test_leftovers_week_meets_each_feasible_dessert_target(self):
+        for target in range(7):
+            with self.subTest(target=target):
+                self.now = datetime(2026, 9, 7, 8, tzinfo=ZoneInfo("Europe/Berlin")).timestamp()
+                self.settings = Settings(recipes_per_day=2, sunday_leftovers=True,
+                                         dessert_days_per_week=target)
+                self.store = StateStore(Path(self.tmp.name) / f"state-{target}.json")
+                self.service = self.build()
+                # Defer optional desserts so every forced-allocation boundary is exercised.
+                self.service.rng.random = lambda: 0.999
+                fetch_count = len(self.api.filters)
+                for day in range(7):
+                    await self.service.tick()
+                    if day < 6:
+                        await self.service.handle_update(self.update())
+                        await self.service.tick()
+                    self.now += 86400
+                self.assertEqual(self.service.state.dessert_days_used_this_week, target)
+                self.assertEqual(len(self.api.filters) - fetch_count, 6)
+                self.assertEqual(self.telegram.messages[-1],
+                                 "Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)")
+
     async def test_dessert_never_exceeds_limit_and_sunday_forces(self):
         self.settings = Settings(recipes_per_day=2, dessert_days_per_week=0)
         self.service = self.build()
@@ -425,10 +570,48 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.telegram.call = AsyncMock(side_effect=[APIError("Telegram", 429, 90), True])
         self.service.scheduler = AsyncMock()
         self.service.listen = AsyncMock()
+        self.service.resend_worker = AsyncMock()
         with patch("recipe_bot.service.asyncio.sleep", new_callable=AsyncMock) as sleep:
             await self.service.run()
         sleep.assert_awaited_once_with(90)
         self.assertEqual(self.telegram.call.await_count, 2)
+        self.assertEqual(self.service.telegram_retry_at, self.now + 90)
+
+    async def test_polling_failure_blocks_sends_until_cooldown(self):
+        self.telegram.updates = AsyncMock(side_effect=APIError("Telegram getUpdates", 429, 90))
+        self.telegram.send = AsyncMock()
+        with patch("recipe_bot.service.asyncio.sleep", side_effect=asyncio.CancelledError):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.service.listen()
+        with self.assertRaises(APIError):
+            await self.service.send_telegram(self.telegram.send, "test")
+        self.telegram.send.assert_not_awaited()
+        self.now += 90
+        await self.service.send_telegram(self.telegram.send, "test")
+        self.telegram.send.assert_awaited_once_with("test")
+
+    async def test_shutdown_cancels_resend_worker(self):
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def worker():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        self.telegram.call = AsyncMock(return_value=True)
+        self.service.scheduler = AsyncMock()
+        self.service.listen = AsyncMock()
+        self.service.resend_worker = worker
+        task = asyncio.create_task(self.service.run())
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.assertTrue(stopped.is_set())
 
     async def test_listener_does_not_poll_outside_selection_window(self):
         self.telegram.updates = AsyncMock(side_effect=asyncio.CancelledError)
@@ -460,7 +643,8 @@ class UnitTests(unittest.TestCase):
                         {"vegetarian_days": ["Monday"]}, {"vegetarian_days": ["holiday"]},
                         {"vegetarian_days": "monday"}, {"dessert_days_per_week": -1},
                         {"trigger_codeword": "two words"}, {"language": "de"},
-                        {"interaction_language": "fr"}, {"sunday_leftovers": 1}):
+                        {"interaction_language": "fr"}, {"sunday_leftovers": 1},
+                        {"sunday_leftovers": True, "dessert_days_per_week": 7}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 Settings(**kwargs)
 
@@ -631,6 +815,17 @@ class APITests(unittest.IsolatedAsyncioTestCase):
                 await Telegram(client, "secret", -123).send("test")
         self.assertEqual(raised.exception.retry_after, 90)
         self.assertNotIn("secret", str(raised.exception))
+
+    async def test_telegram_api_level_rate_limit(self):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={
+                "ok": False, "error_code": 429, "parameters": {"retry_after": 90}
+            })
+        )) as client:
+            with self.assertRaises(APIError) as raised:
+                await Telegram(client, "secret", -123).send("test")
+        self.assertEqual(raised.exception.status, 429)
+        self.assertEqual(raised.exception.retry_after, 90)
 
     async def test_telegram_sends_photo_url_and_caption(self):
         def handle(request):

@@ -94,6 +94,8 @@ Siehe `settings.json.example`. Grenzen: 1-100 Rezepte, 1-1439 aktive Minuten,
 oder `en` sein. `trigger_codeword` unterscheidet Gross-/Kleinschreibung, darf
 keinen Whitespace enthalten und ist bis zu 32 Zeichen lang. `sunday_leftovers`
 muss `true` oder `false` sein und ist standardmaessig `false`.
+Mit `sunday_leftovers=true` sind hoechstens sechs Desserttage erlaubt; die
+Verteilung beruecksichtigt nur die verbleibenden Menue-Tage bis Samstag.
 
 Nach Aenderungen an den Einstellungen neu starten. Bestehende Sitzungen behalten
 ihren urspruenglichen Trigger, Sprache, Kandidaten, Dessertentscheidung und
@@ -103,6 +105,10 @@ Mit `<trigger_codeword> resend` (zum Beispiel `!bot resend`) kann jedes
 Gruppenmitglied das aktuelle heutige Menue, das ausgewaehlte Rezept oder die
 Auslassbestaetigung erneut senden. Der Befehl ruft Spoonacular nie auf,
 verbraucht keinen Abrufversuch und oeffnet oder aendert die Auswahl nicht.
+Der Versand erfolgt ueber eine separate Warteschlange mit dem Inhalt zum
+Befehlszeitpunkt. Versandfehler blockieren die Verarbeitung von Auswahlbefehlen
+nicht. Bis zu 32 Anfragen warten; weitere werden verworfen und protokolliert.
+Ausstehende erneute Sendungen gehen bei einem Neustart verloren.
 
 Die Tagesplanung verwendet lokale Wandzeit; Auswahlzeiten verwenden vergangene
 Sekunden. Eine nicht vorhandene Fruehlingszeit startet zur ersten spaeteren
@@ -147,6 +153,9 @@ Nach erstem Workflow-Lauf auf der Repository-Seite **Packages** Paket
 `recipesagent` auf **Public** setzen. Dann kann der Pi das Image ohne
 GitHub-Zugangsdaten laden. Der unveraenderliche SHA-Tag erlaubt gezieltes
 Rollback.
+Veroeffentlichungen laufen nacheinander. Nur ein Image, dessen Commit bei der
+abschliessenden Pruefung noch `main` entspricht, aktualisiert `latest` und `main`;
+veraltete Workflow-Laeufe veroeffentlichen nur den SHA-Tag.
 
 Docker Engine nach offizieller Anleitung fuer Pi OS installieren. Dann
 Host-Konfiguration und persistenten Zustand anlegen:
@@ -308,6 +317,9 @@ Netzwerkfehler werden mit Verzogerung wiederholt; Telegram-Ratenlimits beachten
 Telegram-Hinweis mit Dienst, optionalem HTTP/API-Status und Wiederholungsergebnis.
 Wenn Telegram selbst nicht verfuegbar ist, wird der Hinweisfehler protokolliert
 und ersetzt den urspruenglichen Fehler nicht.
+Alle Telegram-Sendepfade teilen eine Wiederholungssperre, einschliesslich Fotos,
+erneuter Sendungen und Hinweise. Auswahl und Zeitablauf werden auch waehrend
+dieser Sperre verarbeitet; Long Polling wartet nur bei eigenen Fehlern.
 Hoechstens **drei kostenpflichtige Rezeptabrufversuche pro lokalem Tag** werden
 ueber Neustarts hinweg persistiert, mit mindestens fuenf Minuten Abstand zwischen
 fehlgeschlagenen Versuchen. Authentifizierungs- und Quotenfehler stoppen
@@ -431,6 +443,8 @@ See `settings.json.example`. Limits: 1-100 recipes, 1-1439 active minutes,
 `language` must be `en`; `interaction_language` can be `de` or `en`.
 `trigger_codeword` is case-sensitive, without whitespace, up to 32 characters.
 `sunday_leftovers` must be `true` or `false`; it defaults to `false`.
+With `sunday_leftovers=true`, at most six dessert days are allowed; allocation
+counts only the remaining menu days through Saturday.
 Restart after changing settings. Existing sessions retain their original trigger,
 language, candidates, dessert decision, and deadline.
 
@@ -438,6 +452,9 @@ Use `<trigger_codeword> resend` (for example, `!bot resend`) to resend today's
 current menu, selected recipe, or skip confirmation. Any group member may use it.
 It never calls Spoonacular, does not consume a fetch attempt, and does not reopen
 or change selection.
+Delivery uses a separate queue with content captured when the command arrives.
+Send failures do not block selection processing. Up to 32 requests can wait;
+additional requests are dropped and logged. Pending resends are lost on restart.
 
 Daily scheduling uses local wall time; selection duration uses elapsed seconds.
 A nonexistent spring-forward start time runs at the first later local time.
@@ -479,6 +496,9 @@ After first workflow run, open the repository's **Packages** page, select the
 `recipesagent` container package, and set its visibility to **Public**. The Pi
 can then pull it without GitHub credentials. The immutable SHA tag supports a
 specific rollback.
+Publication is serialized. Only an image whose commit still matches `main` at
+the final check updates `latest` and `main`; stale workflow runs publish only
+the SHA tag.
 
 Install Docker Engine using Docker's official instructions for your Pi OS, then
 create the host configuration and persistent state directory:
@@ -632,6 +652,9 @@ Network errors retry with delay; Telegram rate limits honor `retry_after`.
 Failed Spoonacular requests send a safe Telegram alert with the service, optional
 HTTP/API status, and retry outcome. If Telegram itself is unavailable, the alert
 failure is logged and does not replace the original retry.
+All Telegram send paths share a retry cooldown, including photos, resends, and
+alerts. Selection and deadline processing continue during this cooldown; long
+polling waits only after its own failures.
 At most **three paid recipe fetch attempts per local day**, persisted across
 restarts, with at least five minutes between failed attempts. Auth/quota errors
 stop recipe fetches for that date. Incomplete batches (including missing

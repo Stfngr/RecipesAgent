@@ -70,7 +70,11 @@ class Telegram:
             timeout=httpx.Timeout(45, connect=10),
         )
         if data.get("ok") is not True or "result" not in data:
-            raise APIError(f"Telegram {method}", data.get("error_code"))
+            try:
+                retry_after = float(data.get("parameters", {}).get("retry_after", 60))
+            except (ValueError, TypeError, AttributeError):
+                retry_after = 60
+            raise APIError(f"Telegram {method}", data.get("error_code"), retry_after)
         return data["result"]
 
     async def send(self, text: str):

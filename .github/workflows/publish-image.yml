@@ -22,6 +22,9 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
+    concurrency:
+      group: publish-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -36,13 +39,26 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/recipesagent
           tags: |
-            type=raw,value=latest
-            type=raw,value=main
             type=sha
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           push: true
           platforms: linux/arm64
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+      - name: Promote current main image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ fromJSON(steps.metadata.outputs.json).tags[0] }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          current_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          if [ "$current_sha" = "$GITHUB_SHA" ]; then
+            repository=${IMAGE%:*}
+            docker buildx imagetools create \
+              --tag "$repository:latest" \
+              --tag "$repository:main" \
+              "$repository@$DIGEST"
+          fi
