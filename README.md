@@ -94,17 +94,10 @@ Check aktuellen `main`-Commits aktualisiert.
 ### Vorbereitung für `docker run` oder Compose
 
 Docker Engine auf dem 64-Bit-Linux-ARM64-Host installieren; für Compose
-zusätzlich das Compose-Plugin. Befehle aus dem
-Repository-Verzeichnis ausführen; falls noch kein Checkout vorhanden ist:
-
-```bash
-git clone https://github.com/Stfngr/RecipesAgent.git
-cd RecipesAgent
-```
-
-Image **vor** der Host-Konfiguration herunterladen. Konfigurationsvorlagen nur
-bei der Erstinstallation kopieren, sonst würden bestehende Zugangsdaten
-überschrieben. `bot-network` bleibt auch für das optionale Dashboard erhalten:
+zusätzlich das Compose-Plugin. **Kein Repository-Klon nötig:** Das Image
+enthält die Anwendung. Konfigurationsdateien auf dem Host nur bei der
+Erstinstallation anlegen, sonst würden bestehende Zugangsdaten überschrieben.
+`bot-network` bleibt auch für das optionale Dashboard erhalten:
 
 ```bash
 sudo docker pull ghcr.io/stfngr/recipesagent:latest
@@ -112,9 +105,8 @@ if ! sudo docker network inspect bot-network >/dev/null 2>&1; then
   sudo docker network create bot-network
 fi
 sudo install -d -m 700 /etc/recipe-bot
-sudo install -m 600 .env.example /etc/recipe-bot/.env
-sudo install -m 600 settings.json.example /etc/recipe-bot/settings.json
-sudo chown 10001:10001 /etc/recipe-bot/settings.json
+sudo install -m 600 /dev/null /etc/recipe-bot/.env
+sudo install -m 600 -o 10001 -g 10001 /dev/null /etc/recipe-bot/settings.json
 sudo install -d -o 10001 -g 10001 -m 700 /var/lib/recipe-bot
 ```
 
@@ -133,6 +125,22 @@ verwenden. Anschließend Zugangsdaten und Einstellungen bearbeiten. Werte in
 sudoedit /etc/recipe-bot/.env
 sudoedit /etc/recipe-bot/settings.json
 ```
+
+In `.env` die Platzhalter durch echte Zugangsdaten ersetzen und optionale
+Werte leer lassen, wenn die Integration nicht genutzt wird:
+
+```env
+TELEGRAM_BOT_TOKEN=123456:replace-with-real-bot-token
+TELEGRAM_CHAT_ID=-1001234567890
+SPOONACULAR_API_KEY=replace-with-real-api-key
+DASHBOARD_URL=
+DASHBOARD_TOKEN=
+OLLAMA_URL=
+```
+
+In `settings.json` mindestens `{}` eintragen; alle Einstellungen haben
+Standardwerte. Eine leere Datei ist **kein** gültiges JSON. Bei Bedarf die
+Werte aus dem Konfigurationsabschnitt anpassen.
 
 ### Optional: Ollama vor dem Bot starten
 
@@ -233,6 +241,17 @@ statt `ghcr.io/stfngr/recipesagent:latest` ausführen. Ein Backup aus State-
 Version 7 eignet sich **nicht** für Rollback auf Version 6.
 
 ### Alternative mit Docker Compose
+
+Nur die Compose-Datei in ein Verzeichnis auf dem Pi herunterladen; dort alle
+folgenden Compose-Befehle ausführen. Das vollständige Repository ist nicht
+nötig:
+
+```bash
+curl --fail --location --silent --show-error \
+  --output compose.yaml \
+  https://raw.githubusercontent.com/Stfngr/RecipesAgent/main/compose.yaml
+sudo docker compose -f compose.yaml config --no-env-resolution -q
+```
 
 `compose.yaml` startet denselben Bot mit identischen Mounts, Sicherheitsoptionen
 und dem externen `bot-network`. Compose **statt** `docker run` verwenden;
@@ -426,15 +445,16 @@ Make the GitHub Package public after first publication. SHA tags are immutable;
 ### Preparation For `docker run` Or Compose
 
 Install Docker Engine on the Linux ARM64 host (also the Compose plugin when
-using Compose) and work from a repository
-checkout (`git clone` command above). **Pull the bot image before copying the
-example configuration files**, as shown in the German installation section.
-Create `bot-network` if needed and copy the examples only once: repeating the
-`install` commands would overwrite credentials. Create the state directory
-owned by UID/GID 10001. Choose either `docker run` or Compose; do not run both.
-To translate, start Ollama with the chosen deployment method and pull the model
-before starting the bot. Use unquoted `KEY=value` lines in
-`/etc/recipe-bot/.env`; `docker run --env-file` does not remove quotes. Set
+using Compose). **No repository checkout is needed.** Pull the image before
+creating the host configuration files, as shown in the German installation
+section. Create `bot-network` if needed and install empty files only once:
+repeating `install` would overwrite credentials. Fill `/etc/recipe-bot/.env`
+with Telegram token, numeric chat ID and Spoonacular API key; use unquoted
+`KEY=value` lines because `docker run --env-file` does not remove quotes.
+Write `{}` to `/etc/recipe-bot/settings.json` for all defaults; an empty file
+is not valid JSON. The state directory must be owned by UID/GID 10001. Choose
+either `docker run` or Compose, never both. To translate, start Ollama with the
+chosen deployment method and pull the model before starting the bot. Set
 `OLLAMA_URL=http://recipe-ollama:11434` with `docker run`,
 `OLLAMA_URL=http://ollama:11434` with Compose, or leave it empty.
 
@@ -455,6 +475,10 @@ state changes made since the backup. The German section contains exact commands.
 
 ### Optional Docker Compose
 
+Download only `compose.yaml` from
+`https://raw.githubusercontent.com/Stfngr/RecipesAgent/main/compose.yaml` with
+`curl`, as shown in the German Compose section. Run all Compose commands from
+the directory containing the downloaded file; no clone is required.
 `compose.yaml` is an alternative to `docker run`, not an additional bot. Before
 switching, stop and remove any manually started bot and Ollama containers; the
 state bind mount and named Ollama volume remain. The external `bot-network` and
