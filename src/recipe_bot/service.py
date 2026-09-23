@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import date, datetime
 import logging
 import random
@@ -7,7 +8,7 @@ import time
 from .api import APIError, Spoonacular, Telegram
 from .config import Settings, WEEKDAYS
 from .dashboard import Dashboard, selection_update
-from .recipes import details, is_resend_command, is_skip_command, parse_selection, skipped, summary
+from .recipes import Recipe, details, is_resend_command, is_skip_command, parse_selection, skipped, summary
 from .state import Session, StateStore
 
 log = logging.getLogger(__name__)
@@ -15,7 +16,8 @@ log = logging.getLogger(__name__)
 
 class RecipeService:
     def __init__(self, settings: Settings, store: StateStore, recipes: Spoonacular,
-                 telegram: Telegram, clock=time.time, rng=None, dashboard: Dashboard | None = None):
+                 telegram: Telegram, clock=time.time, rng=None, dashboard: Dashboard | None = None,
+                 translator=None):
         self.settings = settings
         self.store = store
         self.state = store.load()
@@ -30,6 +32,8 @@ class RecipeService:
         self.resends = asyncio.Queue(maxsize=32)
         self.dashboard = dashboard
         self.dashboard_changed = asyncio.Event()
+        self.translator = translator
+        self.translation_changed = asyncio.Event()
 
     def record_telegram_failure(self, error: APIError):
         if error.status != 400:
@@ -65,7 +69,7 @@ class RecipeService:
                 self.resolve(self.rng.randrange(len(session.recipes)), automatic=True)
             if self.clock() < self.retry_at:
                 return
-            if session and session.phase in ("announcing", "delivering", "skipping"):
+            if session and session.phase in ("announcing", "translating_recipe", "delivering", "skipping"):
                 await self.deliver()
             now = self.local_now()
             if (self.state.session is None or self.state.session.phase in ("done", "skipped")) and (
@@ -115,9 +119,15 @@ class RecipeService:
             window_minutes=self.settings.active_window_minutes,
             outbox=summary(recipes, dessert, self.settings.interaction_language,
                            self.settings.trigger_codeword, self.settings.active_window_minutes),
+            phase="translating_menu" if self.translator else "announcing",
+            translation_deadline=(self.clock() + self.settings.translation_job_timeout_minutes * 60
+                                  if self.translator else 0),
+            translation_model=self.settings.translation_model if self.translator else "",
         )
         self.state.dessert_days_used_this_week += int(dessert)
         self.store.save(self.state)
+        if self.translator:
+            self.translation_changed.set()
         log.info("Daily session created: %s", self.state.session.day)
 
     async def notify_fetch_failure(self, error: APIError):
@@ -126,14 +136,19 @@ class RecipeService:
             outcome = "Keine weiteren Versuche heute." if exhausted else "Neuer Versuch in mindestens 5 Minuten."
         else:
             outcome = "No more attempts today." if exhausted else "Retrying in at least 5 minutes."
+        alert = (f"Rezeptabruf fehlgeschlagen" + (f" (HTTP/API {error.status})" if error.status else "")
+                 if self.settings.interaction_language == "de" else str(error))
         try:
-            await self.send_telegram(self.telegram.send, f"{error}. {outcome}")
+            await self.send_telegram(self.telegram.send, f"{alert}. {outcome}")
         except APIError as notification_error:
             log.warning("Could not send recipe failure alert: %s", notification_error)
 
     async def send_sunday_leftovers(self, day: str):
         await self.send_telegram(
-            self.telegram.send, "Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)"
+            self.telegram.send,
+            ("Heute kochen wir mit Resten aus dem Kühlschrank oder bestellen etwas :)"
+             if self.settings.interaction_language == "de" else
+             "Today we cook with leftovers from the fridge or order something :)"),
         )
         self.state.sunday_leftovers_day = day
         self.store.save(self.state)
@@ -141,7 +156,7 @@ class RecipeService:
 
     async def deliver(self):
         session = self.state.session
-        if session is None or session.phase not in ("announcing", "delivering", "skipping"):
+        if session is None or session.phase not in ("announcing", "translating_recipe", "delivering", "skipping"):
             return
         if session.phase == "delivering" and not session.photo_delivered:
             await self.send_selected_photo(session)
@@ -151,6 +166,8 @@ class RecipeService:
             await self.send_telegram(self.telegram.send, session.outbox[session.next_message])
             session.next_message += 1
             self.store.save(self.state)
+        if session.phase == "translating_recipe":
+            return
         if session.phase == "announcing":
             session.opened_at = self.clock()
             session.deadline = session.opened_at + session.window_minutes * 60
@@ -165,18 +182,154 @@ class RecipeService:
         session = self.state.session
         recipe = session.recipes[index]
         session.selected_index = index
+        session.selected_automatic = automatic
+        if len(session.translated_titles) == len(session.recipes):
+            session.selected_title = session.translated_titles[index]
+        session.translation_attempts = 0
+        session.translation_retry_at = 0
+        if self.translator and session.translation_model == self.settings.translation_model:
+            session.phase = "translating_recipe"
+            session.translation_deadline = self.clock() + self.settings.translation_job_timeout_minutes * 60
+            session.outbox = ["Rezept ausgewählt. Übersetzung läuft." if session.language == "de"
+                              else "Recipe selected. Translation in progress."]
+            session.next_message = 0
+        else:
+            self.prepare_selected(session, recipe)
+        self.store.save(self.state)
+        if self.dashboard and session.phase == "delivering":
+            self.dashboard_changed.set()
+        if session.phase == "translating_recipe":
+            self.translation_changed.set()
+        log.info("%s selection: recipe %s", "Timeout" if automatic else "User", recipe.id)
+
+    def selected_recipe(self, session: Session) -> Recipe:
+        recipe = session.recipes[session.selected_index]
+        if session.translation_fallback or not session.translated_ingredients or not session.translated_instructions:
+            return recipe
+        return replace(recipe, title=session.selected_title,
+                       ingredients=session.translated_ingredients,
+                       instructions=session.translated_instructions)
+
+    def prepare_selected(self, session: Session, recipe: Recipe, fallback=False):
         session.phase = "delivering"
-        session.outbox = details(recipe, session.language, automatic)
+        session.outbox = details(recipe, session.language, session.selected_automatic)
+        if fallback:
+            message = ("Übersetzung derzeit nicht verfügbar. Hier ist das englische Original."
+                       if session.language == "de" else "Translation unavailable. English original follows.")
+            session.outbox = [message, *session.outbox]
         session.next_message = 0
         if self.dashboard:
-            update = selection_update(recipe, session.day, automatic, self.clock(),
+            update = selection_update(recipe, session.day, session.selected_automatic, self.clock(),
                                       self.state.dashboard_updated_at)
             self.state.dashboard_pending = update
             self.state.dashboard_updated_at = update["updated_at"]
+
+    def finish_translation(self, session: Session, fallback: bool):
+        if session.phase == "translating_menu":
+            if fallback:
+                session.translated_titles = []
+                menu = list(session.recipes)
+            else:
+                menu = [replace(recipe, title=title) for recipe, title in
+                        zip(session.recipes, session.translated_titles)]
+            session.outbox = summary(menu, session.dessert, session.language,
+                                     session.trigger, session.window_minutes)
+            if fallback and self.translator:
+                message = ("Übersetzung derzeit nicht verfügbar. Rezepttitel bleiben Englisch."
+                           if session.language == "de" else "Translation unavailable. Recipe titles remain English.")
+                session.outbox = [message, *session.outbox]
+            session.phase = "announcing"
+        else:
+            session.translation_fallback = fallback
+            recipe = session.recipes[session.selected_index] if fallback else self.selected_recipe(session)
+            self.prepare_selected(session, recipe, fallback and self.translator is not None)
+        session.translation_retry_at = 0
+        session.translation_attempts = 0
         self.store.save(self.state)
-        if self.dashboard:
+        if self.dashboard and session.phase == "delivering":
             self.dashboard_changed.set()
-        log.info("%s selection: recipe %s", "Timeout" if automatic else "User", recipe.id)
+
+    def translation_batch(self, session: Session):
+        if session.phase == "translating_menu":
+            start = len(session.translated_titles)
+            return "translated_titles", [recipe.title for recipe in session.recipes[start:start + 5]]
+        recipe = session.recipes[session.selected_index]
+        if not session.selected_title:
+            return "selected_title", [recipe.title]
+        for field, source in (("translated_ingredients", recipe.ingredients),
+                              ("translated_instructions", recipe.instructions)):
+            start = len(getattr(session, field))
+            if start < len(source):
+                return field, source[start:start + 4]
+        return None, []
+
+    async def translation_worker(self):
+        while True:
+            async with self.lock:
+                session = self.state.session
+                if session is None or session.phase not in ("translating_menu", "translating_recipe"):
+                    self.translation_changed.clear()
+                    wait = None
+                    batch = None
+                elif (self.clock() >= session.translation_deadline or self.translator is None
+                      or session.translation_model != self.settings.translation_model
+                      or session.translation_attempts >= self.settings.translation_attempts):
+                    self.finish_translation(session, fallback=True)
+                    continue
+                elif self.clock() < session.translation_retry_at:
+                    wait = min(session.translation_retry_at, session.translation_deadline) - self.clock()
+                    self.translation_changed.clear()
+                    batch = None
+                else:
+                    field, texts = self.translation_batch(session)
+                    if not texts:
+                        self.finish_translation(session, fallback=False)
+                        continue
+                    session.translation_attempts += 1
+                    self.store.save(self.state)
+                    batch = (session, session.phase, field, texts)
+                    wait = 0
+            if batch is None:
+                if wait is None:
+                    await self.translation_changed.wait()
+                else:
+                    try:
+                        await asyncio.wait_for(self.translation_changed.wait(), timeout=wait)
+                    except asyncio.TimeoutError:
+                        pass
+                continue
+            session, phase, field, texts = batch
+            try:
+                translated = await asyncio.wait_for(
+                    self.translator.translate(texts),
+                    timeout=min(self.settings.translation_request_timeout_seconds,
+                                max(0.001, session.translation_deadline - self.clock())),
+                )
+            except (APIError, asyncio.TimeoutError) as error:
+                if isinstance(error, asyncio.TimeoutError):
+                    error = APIError("Ollama translation timeout")
+                async with self.lock:
+                    if self.state.session is session and session.phase == phase:
+                        log.warning("%s; translation attempt %s", error, session.translation_attempts)
+                        if (session.translation_attempts >= self.settings.translation_attempts
+                                or self.clock() >= session.translation_deadline):
+                            self.finish_translation(session, fallback=True)
+                        else:
+                            session.translation_retry_at = self.clock() + 30 * session.translation_attempts
+                            self.store.save(self.state)
+                continue
+            async with self.lock:
+                if self.state.session is session and session.phase == phase:
+                    if field == "selected_title":
+                        session.selected_title = translated[0]
+                    else:
+                        getattr(session, field).extend(translated)
+                    session.translation_attempts = 0
+                    session.translation_retry_at = 0
+                    if not self.translation_batch(session)[1]:
+                        self.finish_translation(session, fallback=False)
+                    else:
+                        self.store.save(self.state)
 
     def skip(self):
         session = self.state.session
@@ -187,11 +340,8 @@ class RecipeService:
         log.info("User skipped selection")
 
     def resend_menu(self, session: Session):
-        messages = (summary(session.recipes, session.dessert, session.language,
-                            session.trigger, session.window_minutes)
-                    if session.phase in ("announcing", "active") else session.outbox)
         photo_session = session if session.phase in ("delivering", "done") else None
-        self.enqueue_resend(list(messages), photo_session)
+        self.enqueue_resend(list(session.outbox), photo_session)
 
     def enqueue_resend(self, messages: list[str], photo_session: Session | None = None):
         try:
@@ -221,7 +371,7 @@ class RecipeService:
                 self.resends.task_done()
 
     async def send_selected_photo(self, session: Session):
-        recipe = session.recipes[session.selected_index]
+        recipe = self.selected_recipe(session)
         if not recipe.image_url or session.photo_skipped:
             return
         try:
@@ -333,6 +483,9 @@ class RecipeService:
                  asyncio.create_task(self.resend_worker())]
         if self.dashboard:
             tasks.append(asyncio.create_task(self.dashboard_worker()))
+        if self.translator or (self.state.session and self.state.session.phase in
+                               ("translating_menu", "translating_recipe")):
+            tasks.append(asyncio.create_task(self.translation_worker()))
         try:
             await asyncio.gather(*tasks)
         finally:

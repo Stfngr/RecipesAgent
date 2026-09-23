@@ -8,3 +8,4 @@
 - Do not hold `RecipeService.lock` during network I/O. Preserve first-valid-selection-wins behavior.
 - Telegram cooldown applies to all Telegram sends and polling failures. Selection and deadline resolution must still proceed during delivery cooldown.
 - Dashboard delivery is durable and independent from Telegram: selection queues a persistent update; dashboard failures must not prevent Telegram delivery.
+- Persist translation progress and retry budgets before Ollama I/O. Do not hold `RecipeService.lock` during translation calls. After exhaustion, use the complete English original for both Telegram and Dashboard.

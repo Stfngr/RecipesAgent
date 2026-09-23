@@ -12,8 +12,9 @@ from .config import load_config
 from .dashboard import Dashboard
 from .service import RecipeService
 from .state import StateStore
+from .translation import OllamaTranslator
 
-TEST_MESSAGE = "Recipe bot Telegram test successful."
+TEST_MESSAGE = "Rezept-Bot: Telegram-Test erfolgreich."
 
 
 async def run(settings, credentials, state_path):
@@ -23,6 +24,9 @@ async def run(settings, credentials, state_path):
             Telegram(client, credentials.telegram_token, credentials.chat_id),
             dashboard=(Dashboard(client, credentials.dashboard_url, credentials.dashboard_token)
                        if credentials.dashboard_url else None),
+            translator=(OllamaTranslator(client, credentials.ollama_url, settings.translation_model,
+                                         settings.translation_request_timeout_seconds)
+                        if credentials.ollama_url else None),
         )
         task = asyncio.create_task(service.run())
         loop = asyncio.get_running_loop()
@@ -34,13 +38,13 @@ async def run(settings, credentials, state_path):
             logging.info("Service stopped")
 
 
-async def send_test_message(telegram: Telegram):
-    await telegram.send(TEST_MESSAGE)
+async def send_test_message(telegram: Telegram, language="de"):
+    await telegram.send(TEST_MESSAGE if language == "de" else "Recipe bot Telegram test successful.")
 
 
-async def run_test_message(credentials):
+async def run_test_message(credentials, language="de"):
     async with httpx.AsyncClient(timeout=20, limits=httpx.Limits(max_connections=4)) as client:
-        await send_test_message(Telegram(client, credentials.telegram_token, credentials.chat_id))
+        await send_test_message(Telegram(client, credentials.telegram_token, credentials.chat_id), language)
 
 
 def main(argv=None):
@@ -58,7 +62,7 @@ def main(argv=None):
     try:
         settings, credentials = load_config(args.settings, args.env_file)
         if args.send_test_message:
-            asyncio.run(run_test_message(credentials))
+            asyncio.run(run_test_message(credentials, settings.interaction_language))
             logging.info("Telegram test message sent")
             return
         args.state.parent.mkdir(parents=True, exist_ok=True)

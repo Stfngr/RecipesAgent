@@ -32,6 +32,16 @@ class Session:
     selected_index: int | None = None
     photo_delivered: bool = False
     photo_skipped: bool = False
+    translated_titles: list[str] = field(default_factory=list)
+    translated_ingredients: list[str] = field(default_factory=list)
+    translated_instructions: list[str] = field(default_factory=list)
+    translation_attempts: int = 0
+    translation_retry_at: float = 0
+    translation_deadline: float = 0
+    selected_automatic: bool = False
+    translation_fallback: bool = False
+    selected_title: str = ""
+    translation_model: str = ""
 
     def __post_init__(self):
         date.fromisoformat(self.day)
@@ -45,7 +55,8 @@ class Session:
             raise ValueError("Invalid session trigger")
         if type(self.window_minutes) is not int or not 1 <= self.window_minutes <= 1439:
             raise ValueError("Invalid session window")
-        if self.phase not in ("announcing", "active", "delivering", "skipping", "done", "skipped"):
+        if self.phase not in ("translating_menu", "announcing", "active", "translating_recipe",
+                              "delivering", "skipping", "done", "skipped"):
             raise ValueError("Invalid session phase")
         if not isinstance(self.outbox, list) or not self.outbox or not all(
             isinstance(message, str) and 0 < len(message) <= 2000 for message in self.outbox
@@ -55,13 +66,36 @@ class Session:
             raise ValueError("Invalid delivery cursor")
         if type(self.photo_delivered) is not bool or type(self.photo_skipped) is not bool:
             raise ValueError("Invalid photo delivery state")
-        if self.phase != "announcing":
+        if self.selected_index is not None and (type(self.selected_index) is not int
+                                               or not 0 <= self.selected_index < len(self.recipes)):
+            raise ValueError("Invalid selected recipe")
+        for items, limit in ((self.translated_titles, len(self.recipes)),
+                             (self.translated_ingredients, len(self.recipes[self.selected_index].ingredients)
+                              if self.selected_index is not None else 0),
+                             (self.translated_instructions, len(self.recipes[self.selected_index].instructions)
+                              if self.selected_index is not None else 0)):
+            if not isinstance(items, list) or len(items) > limit or any(
+                not isinstance(item, str) or not item.strip() for item in items
+            ):
+                raise ValueError("Invalid translated recipe content")
+        if not isinstance(self.selected_title, str) or not isinstance(self.translation_model, str):
+            raise ValueError("Invalid translation metadata")
+        if self.phase in ("translating_menu", "translating_recipe") and not self.translation_model:
+            raise ValueError("Missing translation model")
+        if (type(self.translation_attempts) is not int or self.translation_attempts < 0
+                or any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
+                       for value in (self.translation_retry_at, self.translation_deadline))
+                or type(self.selected_automatic) is not bool or type(self.translation_fallback) is not bool):
+            raise ValueError("Invalid translation state")
+        if self.phase in ("translating_menu", "translating_recipe") and self.translation_deadline <= 0:
+            raise ValueError("Invalid translation deadline")
+        if self.phase not in ("announcing", "translating_menu"):
             for value in (self.opened_at, self.deadline):
                 if type(value) not in (int, float) or not math.isfinite(value):
                     raise ValueError("Invalid session deadline")
             if self.deadline <= self.opened_at:
                 raise ValueError("Deadline must follow opening time")
-        if self.phase in ("delivering", "done"):
+        if self.phase in ("translating_recipe", "delivering", "done"):
             if type(self.selected_index) is not int or not 0 <= self.selected_index < len(self.recipes):
                 raise ValueError("Invalid selected recipe")
         elif self.selected_index is not None:
@@ -79,10 +113,10 @@ class State:
     sunday_leftovers_day: str = ""
     dashboard_pending: dict | None = None
     dashboard_updated_at: str = ""
-    version: int = field(default=6)
+    version: int = field(default=7)
 
     def __post_init__(self):
-        if self.version != 6:
+        if self.version != 7:
             raise ValueError("Unsupported state version")
         if self.week and not re.fullmatch(r"[0-9]{4}-W[0-9]{2}", self.week):
             raise ValueError("Invalid state week")
@@ -155,6 +189,23 @@ class StateStore:
             data["dashboard_pending"] = None
             data["dashboard_updated_at"] = ""
             data["version"] = 6
+            migrated = True
+        if data.get("version") == 6 and set(data) == current_fields:
+            if data["session"] is not None:
+                old_session_fields = {item.name for item in fields(Session)} - {
+                    "translated_titles", "translated_ingredients", "translated_instructions",
+                    "translation_attempts", "translation_retry_at", "translation_deadline",
+                    "selected_automatic", "translation_fallback", "selected_title", "translation_model",
+                }
+                if not isinstance(data["session"], dict) or set(data["session"]) != old_session_fields:
+                    raise ValueError("Incomplete or unsupported session")
+                for name, default in (("translated_titles", []), ("translated_ingredients", []),
+                                      ("translated_instructions", []), ("translation_attempts", 0),
+                                      ("translation_retry_at", 0), ("translation_deadline", 0),
+                                      ("selected_automatic", False), ("translation_fallback", False),
+                                      ("selected_title", ""), ("translation_model", "")):
+                    data["session"].setdefault(name, default)
+            data["version"] = 7
             migrated = True
         if set(data) != current_fields:
             raise ValueError("Incomplete or unsupported state file")

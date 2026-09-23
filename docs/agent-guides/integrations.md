@@ -8,3 +8,4 @@
 - Maintain Telegram long polling. On startup call `deleteWebhook` with `drop_pending_updates=False`.
 - Dashboard config is optional, but `DASHBOARD_URL` and `DASHBOARD_TOKEN` must be set together. Publish selections with authenticated `PUT /api/v1/state/recipe-bot/current-recipe`.
 - Preserve monotonic dashboard `updated_at` values, even if system clock moves backward.
+- Ollama is optional and accessed over the internal Docker network. `OLLAMA_URL` missing or empty disables translation without requests. Validate its origin and never log recipe input or response bodies.

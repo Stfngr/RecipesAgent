@@ -24,12 +24,20 @@ class Settings:
     dessert_days_per_week: int = 2
     interaction_language: str = "de"
     sunday_leftovers: bool = False
+    translation_language: str = "de"
+    translation_model: str = "qwen3:1.7b"
+    translation_attempts: int = 3
+    translation_request_timeout_seconds: int = 300
+    translation_job_timeout_minutes: int = 15
 
     def __post_init__(self):
         for name, low, high in (
             ("recipes_per_day", 1, 100),
             ("active_window_minutes", 1, 1439),
             ("dessert_days_per_week", 0, 7),
+            ("translation_attempts", 1, 10),
+            ("translation_request_timeout_seconds", 1, 3600),
+            ("translation_job_timeout_minutes", 1, 1440),
         ):
             value = getattr(self, name)
             if type(value) is not int or not low <= value <= high:
@@ -50,6 +58,12 @@ class Settings:
             raise ValueError("Spoonacular recipes support English only; set language=en")
         if self.interaction_language not in ("en", "de"):
             raise ValueError("interaction_language must be en or de")
+        if self.translation_language != "de":
+            raise ValueError("translation_language must be de")
+        if not isinstance(self.translation_model, str) or not re.fullmatch(
+            r"[A-Za-z0-9_.:/-]{1,128}", self.translation_model
+        ):
+            raise ValueError("Invalid translation_model")
         if type(self.sunday_leftovers) is not bool:
             raise ValueError("sunday_leftovers must be true or false")
         if self.sunday_leftovers and self.dessert_days_per_week > 6:
@@ -75,6 +89,7 @@ class Credentials:
     spoonacular_key: str = field(repr=False)
     dashboard_url: str | None = None
     dashboard_token: str | None = field(default=None, repr=False)
+    ollama_url: str | None = None
 
 
 def load_config(settings_path: Path, env_path: Path) -> tuple[Settings, Credentials]:
@@ -108,4 +123,15 @@ def load_config(settings_path: Path, env_path: Path) -> tuple[Settings, Credenti
             raise ValueError("DASHBOARD_URL must be an HTTP(S) origin without credentials")
         if not dashboard_token.isascii() or any(char.isspace() for char in dashboard_token):
             raise ValueError("Invalid DASHBOARD_TOKEN")
-    return settings, Credentials(token, int(chat_id), key, dashboard_url, dashboard_token)
+    ollama_url = os.environ.get("OLLAMA_URL", "").strip() or None
+    if ollama_url:
+        parsed = urlsplit(ollama_url)
+        try:
+            port = parsed.port
+        except ValueError:
+            raise ValueError("Invalid OLLAMA_URL port") from None
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
+                or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")
+                or any(char.isspace() for char in ollama_url) or (port is not None and port == 0)):
+            raise ValueError("OLLAMA_URL must be an HTTP(S) origin without credentials")
+    return settings, Credentials(token, int(chat_id), key, dashboard_url, dashboard_token, ollama_url)

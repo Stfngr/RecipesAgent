@@ -110,7 +110,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(APIError):
             await self.service.tick()
         self.assertEqual(self.telegram.messages, [
-            "Spoonacular request failed (HTTP/API 500). Neuer Versuch in mindestens 5 Minuten."
+            "Rezeptabruf fehlgeschlagen (HTTP/API 500). Neuer Versuch in mindestens 5 Minuten."
         ])
 
     async def test_exhausted_recipe_budget_sends_final_alert(self):
@@ -118,8 +118,19 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(APIError):
             await self.service.tick()
         self.assertEqual(self.telegram.messages, [
-            "Spoonacular request failed (HTTP/API 402). Keine weiteren Versuche heute."
+            "Rezeptabruf fehlgeschlagen (HTTP/API 402). Keine weiteren Versuche heute."
         ])
+
+    async def test_english_alert_and_sunday_message(self):
+        self.settings = Settings(recipes_per_day=2, interaction_language="en", sunday_leftovers=True)
+        self.service = self.build()
+        await self.service.notify_fetch_failure(APIError("Spoonacular", 500))
+        self.assertEqual(self.telegram.messages[-1],
+                         "Spoonacular request failed (HTTP/API 500). Retrying in at least 5 minutes.")
+        self.now = datetime(2026, 9, 13, 8, tzinfo=ZoneInfo("Europe/Berlin")).timestamp()
+        await self.service.tick()
+        self.assertEqual(self.telegram.messages[-1],
+                         "Today we cook with leftovers from the fridge or order something :)")
 
     async def test_alert_failure_does_not_replace_recipe_failure(self):
         self.api.fail = APIError("Spoonacular", 500)
@@ -628,7 +639,7 @@ class UnitTests(unittest.TestCase):
             with patch("recipe_bot.__main__.load_config", return_value=(Settings(), credentials)), \
                  patch("recipe_bot.__main__.run_test_message", new_callable=AsyncMock) as send:
                 main(["--state", str(state_path), "--send-test-message"])
-            send.assert_awaited_once_with(credentials)
+            send.assert_awaited_once_with(credentials, "de")
             self.assertFalse(state_path.exists())
 
     def test_test_message_content(self):
@@ -686,7 +697,7 @@ class UnitTests(unittest.TestCase):
                        "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = store.load()
-            self.assertEqual(state.version, 6)
+            self.assertEqual(state.version, 7)
             self.assertEqual(state.dessert_days_used_this_week, 1)
             self.assertNotIn("meat_recipes_chosen_this_week", json.loads(path.read_text(encoding="utf-8")))
 
@@ -697,7 +708,7 @@ class UnitTests(unittest.TestCase):
                       "fetch_day": "", "fetch_attempts": 0, "fetch_retry_at": 0, "version": 2}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 6)
+            self.assertEqual(state.version, 7)
             self.assertEqual(state.sunday_leftovers_day, "")
 
     def test_version_three_session_migrates_photo_delivery_state(self):
@@ -710,9 +721,13 @@ class UnitTests(unittest.TestCase):
             del legacy["dashboard_updated_at"]
             del legacy["session"]["photo_delivered"]
             del legacy["session"]["photo_skipped"]
+            for name in ("translated_titles", "translated_ingredients", "translated_instructions",
+                         "translation_attempts", "translation_retry_at", "translation_deadline",
+                         "selected_automatic", "translation_fallback", "selected_title", "translation_model"):
+                del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 6)
+            self.assertEqual(state.version, 7)
             self.assertFalse(state.session.photo_delivered)
             self.assertFalse(state.session.photo_skipped)
 
@@ -725,9 +740,13 @@ class UnitTests(unittest.TestCase):
             del legacy["dashboard_pending"]
             del legacy["dashboard_updated_at"]
             del legacy["session"]["photo_skipped"]
+            for name in ("translated_titles", "translated_ingredients", "translated_instructions",
+                         "translation_attempts", "translation_retry_at", "translation_deadline",
+                         "selected_automatic", "translation_fallback", "selected_title", "translation_model"):
+                del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 6)
+            self.assertEqual(state.version, 7)
             self.assertFalse(state.session.photo_skipped)
 
     def test_partial_state_cannot_reset_counters(self):

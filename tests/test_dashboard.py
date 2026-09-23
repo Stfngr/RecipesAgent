@@ -171,7 +171,7 @@ class ConfigStateTests(unittest.TestCase):
             legacy["version"] = 5
             path.write_text(json.dumps(legacy))
             state = StateStore(path).load()
-            self.assertEqual(state.version, 6)
+            self.assertEqual(state.version, 7)
             self.assertEqual(state.dessert_days_used_this_week, 2)
             self.assertIsNone(state.dashboard_pending)
             corrupt = asdict(state)
