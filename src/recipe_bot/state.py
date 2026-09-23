@@ -113,10 +113,10 @@ class State:
     sunday_leftovers_day: str = ""
     dashboard_pending: dict | None = None
     dashboard_updated_at: str = ""
-    version: int = field(default=7)
+    version: int = field(default=8)
 
     def __post_init__(self):
-        if self.version != 7:
+        if self.version != 8:
             raise ValueError("Unsupported state version")
         if self.week and not re.fullmatch(r"[0-9]{4}-W[0-9]{2}", self.week):
             raise ValueError("Invalid state week")
@@ -207,14 +207,37 @@ class StateStore:
                     data["session"].setdefault(name, default)
             data["version"] = 7
             migrated = True
+        if data.get("version") == 7 and set(data) == current_fields:
+            old_recipe_fields = {item.name for item in fields(Recipe)} - {"metric_ingredients"}
+            session = data["session"]
+            if session is not None:
+                if not isinstance(session, dict) or not isinstance(session.get("recipes"), list):
+                    raise ValueError("Incomplete or unsupported session")
+                for recipe in session["recipes"]:
+                    if not isinstance(recipe, dict) or set(recipe) != old_recipe_fields:
+                        raise ValueError("Incomplete or unsupported recipe")
+                    recipe["metric_ingredients"] = []
+            data["version"] = 8
+            migrated = True
         if set(data) != current_fields:
             raise ValueError("Incomplete or unsupported state file")
+        recipe_fields = {item.name for item in fields(Recipe)}
         if data.get("session") is not None:
             session = data["session"]
             if not isinstance(session, dict) or set(session) != {item.name for item in fields(Session)}:
                 raise ValueError("Incomplete or unsupported session")
+            if not isinstance(session["recipes"], list) or any(
+                not isinstance(recipe, dict) or set(recipe) != recipe_fields for recipe in session["recipes"]
+            ):
+                raise ValueError("Incomplete or unsupported recipe")
             session["recipes"] = [Recipe(**recipe) for recipe in session["recipes"]]
             data["session"] = Session(**session)
+        pending = data.get("dashboard_pending")
+        if pending is not None and (not isinstance(pending, dict)
+                                    or not isinstance(pending.get("payload"), dict)
+                                    or not isinstance(pending["payload"].get("recipe"), dict)
+                                    or set(pending["payload"]["recipe"]) != recipe_fields - {"metric_ingredients"}):
+            raise ValueError("Incomplete or unsupported recipe")
         state = State(**data)
         if migrated:
             self.save(state)

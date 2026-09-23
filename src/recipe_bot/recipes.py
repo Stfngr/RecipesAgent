@@ -1,5 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal
 from html.parser import HTMLParser
+import math
 import re
 
 
@@ -29,6 +31,31 @@ def plain_text(value: str) -> str:
     )
 
 
+_ORIGINAL_QUANTITY = re.compile(
+    r"^(?:\d+(?:\.\d+)?(?:\s+\d+/\d+)?|\d+/\d+)\s+"
+    r"(?:cups?|tablespoons?|teaspoons?|tbsp|tbs|tsp|grams?|kilograms?|g|kg|"
+    r"milliliters?|liters?|ml|l|ounces?|oz|pounds?|lb|lbs)\b\.?\s+(?P<tail>.+)$",
+    re.IGNORECASE,
+)
+_METRIC_UNITS = {"g", "kg", "mg", "ml", "mL", "l", "L", "cl", "dl"}
+
+
+def metric_ingredient(original: str, item: dict) -> str:
+    match = _ORIGINAL_QUANTITY.fullmatch(original)
+    if not match or not re.search(r"[^\W\d_]", match["tail"]):
+        return original
+    measures = item.get("measures")
+    metric = measures.get("metric") if isinstance(measures, dict) else None
+    if not isinstance(metric, dict):
+        return original
+    amount, unit = metric.get("amount"), metric.get("unitShort")
+    if (type(amount) not in (int, float) or not 0 < amount <= 1000000
+            or not math.isfinite(amount) or not isinstance(unit, str) or unit not in _METRIC_UNITS):
+        return original
+    quantity = format(Decimal(str(amount)), "f")
+    return f"{quantity} {unit} {match['tail']}"
+
+
 @dataclass
 class Recipe:
     id: int
@@ -44,6 +71,7 @@ class Recipe:
     source_name: str = ""
     license: str = ""
     image_url: str = ""
+    metric_ingredients: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         if type(self.id) is not int or self.id <= 0:
@@ -57,6 +85,10 @@ class Recipe:
                 isinstance(item, str) and item.strip() for item in items
             ):
                 raise ValueError("Recipe ingredients or instructions missing")
+        if (not isinstance(self.metric_ingredients, list)
+                or (self.metric_ingredients and len(self.metric_ingredients) != len(self.ingredients))
+                or any(not isinstance(item, str) or not item.strip() for item in self.metric_ingredients)):
+            raise ValueError("Invalid metric ingredients")
         for value in (self.ready_minutes, self.prep_minutes, self.cooking_minutes, self.servings):
             if value is not None and (type(value) is not int or value < 0):
                 raise ValueError("Invalid recipe time or servings")
@@ -66,7 +98,10 @@ class Recipe:
 
     @classmethod
     def from_api(cls, data: dict) -> "Recipe":
-        ingredients = [plain_text(item["original"]) for item in data.get("extendedIngredients", [])]
+        extended_ingredients = data.get("extendedIngredients", [])
+        ingredients = [plain_text(item["original"]) for item in extended_ingredients]
+        metric_ingredients = [metric_ingredient(original, item) for original, item in
+                              zip(ingredients, extended_ingredients)]
         instructions = []
         for section in data.get("analyzedInstructions") or []:
             if section.get("name"):
@@ -81,7 +116,7 @@ class Recipe:
 
         return cls(
             id=data["id"], title=plain_text(data["title"]), vegetarian=data["vegetarian"],
-            ingredients=ingredients, instructions=instructions,
+            ingredients=ingredients, instructions=instructions, metric_ingredients=metric_ingredients,
             ready_minutes=number("readyInMinutes"), prep_minutes=number("preparationMinutes"),
             cooking_minutes=number("cookingMinutes"), servings=number("servings"),
             source_url=data.get("sourceUrl") or data.get("spoonacularSourceUrl") or "",

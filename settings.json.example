@@ -10,8 +10,8 @@
   "interaction_language": "de",
   "sunday_leftovers": false,
   "translation_language": "de",
-  "translation_model": "qwen3:1.7b",
+  "translation_model": "qwen3:4b",
   "translation_attempts": 3,
-  "translation_request_timeout_seconds": 300,
-  "translation_job_timeout_minutes": 15
+  "translation_request_timeout_seconds": 900,
+  "translation_job_timeout_minutes": 60
 }

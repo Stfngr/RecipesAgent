@@ -55,13 +55,17 @@ zu einem Container mit demselben Telegram-Token ausführen.
 Desserttage, `vegetarian_days`, Startzeit, IANA-Zeitzone und
 `interaction_language`. `language` muss `en` sein. Mit
 `sunday_leftovers=true` sind höchstens sechs Desserttage zulässig.
-`translation_language` muss `de` sein; Modell, höchstens 3 Versuche je Abschnitt
-(Standard), HTTP-Timeout (300 Sekunden) und Auftragsfrist (15 Minuten) sind
-über `translation_model`, `translation_attempts`,
-`translation_request_timeout_seconds` und `translation_job_timeout_minutes`
-konfigurierbar. **Fehlt `OLLAMA_URL` in `.env` oder ist leer, werden keine
-Ollama-Anfragen gesendet; alle Rezeptinhalte bleiben wie bisher Englisch.**
-`interaction_language` steuert weiterhin feste Bot-Nachrichten.
+`translation_language` muss `de` sein. Für die qualitätsorientierte
+Pi-Übersetzung gelten `qwen3:4b`, 3 Versuche je Abschnitt, 900 Sekunden je
+Übersetzung einschließlich lokaler Prüfung und 60 Minuten Gesamtfrist je
+Übersetzungsauftrag als Standardwerte. Diese Werte sind über `translation_model`,
+`translation_attempts`, `translation_request_timeout_seconds` und
+`translation_job_timeout_minutes` konfigurierbar. Bei einer bestehenden
+`settings.json` explizit gesetzte ältere Werte (z. B. `qwen3:1.7b`, 300
+Sekunden oder 15 Minuten) bei Bedarf selbst anpassen; Standardwerte ersetzen
+keine expliziten Einstellungen. **Fehlt `OLLAMA_URL` in `.env` oder ist leer,
+werden keine Ollama-Anfragen gesendet; alle Rezeptinhalte bleiben wie bisher
+Englisch.** `interaction_language` steuert weiterhin feste Bot-Nachrichten.
 
 `<trigger_codeword> resend` sendet den heutigen Menü-, Auswahl- oder
 Auslasszustand erneut. Es ruft Spoonacular nicht auf. Versandfehler blockieren
@@ -156,15 +160,24 @@ sudo docker run -d \
   --restart unless-stopped \
   --network bot-network \
   -e OLLAMA_NUM_PARALLEL=1 \
+  -e OLLAMA_MAX_LOADED_MODELS=1 \
   -v recipe-ollama:/root/.ollama \
   ollama/ollama:latest
 sudo docker exec recipe-ollama ollama list && \
-  sudo docker exec recipe-ollama ollama pull qwen3:1.7b
+  sudo docker exec recipe-ollama ollama pull qwen3:4b
 ```
 
 Wenn `ollama list` noch keinen Server erreicht, kurz warten und nur die letzte
 `docker exec ... ollama list && docker exec ... ollama pull`-Zeile wiederholen;
-`ollama pull` erst nach erfolgreicher Verbindung ausführen.
+`ollama pull` erst nach erfolgreicher Verbindung ausführen. Maximal ein Modell
+gleichzeitig im Speicher und nur eine parallele Anfrage begrenzen den
+Speicherbedarf, garantieren aber weder freie RAM-Reserven noch Antwortzeiten.
+Optional `qwen3:8b` mit `sudo docker exec recipe-ollama ollama pull qwen3:8b`
+laden und in `settings.json` `"translation_model": "qwen3:8b"` setzen; das
+Modell benötigt etwa 5,2 GB RAM **zuzüglich** Ollama-, Kontext- und
+Systemspeicher. Auf einem Pi 4 mit 8 GB kann das zu Speicherdruck, Swap oder
+Abbrüchen führen; Qualität, RAM und Laufzeit vor Betrieb mit echten Rezepten
+prüfen. Bot nach Änderung an `settings.json` neu starten.
 
 ### Bot starten und prüfen
 
@@ -219,14 +232,17 @@ Zustands-Bind-Mount und `state.json.lock` bleiben bestehen; niemals zwei
 Bot-Instanzen mit demselben Telegram-Token gleichzeitig starten.
 
 **Rollback auf ein älteres Image ist eine Zustandswiederherstellung.** Dieses
-Release migriert `state.json` auf Version 7; Images mit State-Version 6 können
-die migrierte Datei nicht lesen. Den Bot stoppen, das **passende** Backup der
-alten State-Version zurückkopieren, den Bot entfernen und das alte
-`sha-<commit>`-Image ziehen. Danach denselben `docker run`-Befehl mit dem
-alten SHA-Tag statt `latest` ausführen. Die Wiederherstellung verwirft alle
-Zustandsänderungen seit dem Backup; den aktuellen Zustand vorher gesondert
-sichern, wenn er noch benötigt wird. Platzhalter für Backup-Zeitstempel und
-SHA im folgenden Beispiel vor Ausführung ersetzen:
+Release migriert `state.json` beim Start auf Version 8; ältere Images
+mit State-Version 7 oder 6 können die migrierte Datei nicht lesen. Vor dem
+ersten Start des neuen Images im gestoppten Zustand ein Backup der alten
+State-Version anlegen (Befehl oben). Für Rollback den Bot stoppen, das
+**passende, vor der Migration erstellte** Backup zurückkopieren, den Bot
+entfernen und das alte `sha-<commit>`-Image ziehen. Danach denselben
+`docker run`-Befehl mit dem alten SHA-Tag statt `latest` ausführen. Die
+Wiederherstellung verwirft alle Zustandsänderungen seit dem Backup; den
+aktuellen Zustand vorher gesondert sichern, wenn er noch benötigt wird.
+Platzhalter für Backup-Zeitstempel und SHA im folgenden Beispiel vor
+Ausführung ersetzen:
 
 ```bash
 backup=/var/lib/recipe-bot/state.json.backup-REPLACE_WITH_TIMESTAMP
@@ -237,8 +253,9 @@ sudo test -f "$backup" && sudo docker pull "$image" && sudo docker stop recipe-b
 ```
 
 Danach den `docker run`-Befehl von „Bot starten und prüfen“ mit `"$image"`
-statt `ghcr.io/stfngr/recipesagent:latest` ausführen. Ein Backup aus State-
-Version 7 eignet sich **nicht** für Rollback auf Version 6.
+statt `ghcr.io/stfngr/recipesagent:latest` ausführen. Für ein Version-7-Image
+ist ein Backup aus State-Version 7 nötig, für ein Version-6-Image eines aus
+Version 6. Ein Version-8-Backup ist für beide nicht geeignet.
 
 ### Alternative mit Docker Compose
 
@@ -276,11 +293,15 @@ danach das Modell laden. In `/etc/recipe-bot/.env` für Compose
 sudo docker compose -f compose.yaml --profile translation pull ollama
 sudo docker compose -f compose.yaml --profile translation up -d ollama
 sudo docker compose -f compose.yaml --profile translation exec ollama ollama list && \
-  sudo docker compose -f compose.yaml --profile translation exec ollama ollama pull qwen3:1.7b && \
+  sudo docker compose -f compose.yaml --profile translation exec ollama ollama pull qwen3:4b && \
   sudo docker compose -f compose.yaml up -d --force-recreate recipe-bot
 ```
 
-Wenn `ollama list` zu früh ausgeführt wurde, vor `ollama pull` erneut prüfen.
+Optional für `qwen3:8b` statt `qwen3:4b` erst
+`sudo docker compose -f compose.yaml --profile translation exec ollama ollama pull qwen3:8b`
+ausführen und `"translation_model": "qwen3:8b"` in `settings.json` setzen.
+Die RAM-Warnung im Ollama-Abschnitt gilt auch für Compose. Wenn `ollama list`
+zu früh ausgeführt wurde, vor `ollama pull` erneut prüfen.
 Compose übernimmt Änderungen an `.env` durch
 `sudo docker compose -f compose.yaml up -d --force-recreate recipe-bot`;
 `docker compose restart` reicht nicht. Für ein Image-Update:
@@ -346,20 +367,31 @@ Fehler blockieren Telegram nicht; neuere Auswahl ersetzt ältere offene Updates.
 
 Einrichtung und Container-Reihenfolge stehen im Docker-Deployment-Abschnitt.
 Innerhalb des Bot-Containers zeigt `localhost` **nicht** auf Ollama.
-`qwen3:1.7b` ist ein Ausgangspunkt; Qualität und Laufzeit mit echten Rezepten
-auf dem Pi prüfen. Für produktiven Betrieb getestete Image-Version fixieren.
+`qwen3:4b` ist der Qualitäts-Standard für den Pi 4 mit 8 GB;
+`qwen3:8b` ist nur eine speicherintensivere Option (etwa 5,2 GB RAM allein
+für das Modell). Qualität, Speicherbedarf und Laufzeit mit echten Rezepten
+prüfen; für produktiven Betrieb getestete Image-Version fixieren.
 
 Vor der Menüausgabe werden Titel in kleinen Gruppen übersetzt. Nach Auswahl
-übersetzt der Bot ausschließlich das ausgewählte Rezept; währenddessen läuft
-Telegram-Polling weiter. Titel, Bildunterschrift, Zutaten, Zubereitung und
-Dashboard-Payload verwenden dieselbe gespeicherte Fassung. Zahlen und
-Mengenangaben werden geprüft; Quellen, URLs und Lizenzangaben bleiben original.
-Übersetzungsfortschritt, Versuchszähler und Frist überstehen Neustarts. Bei
-Fehlern folgen begrenzte Neuversuche, dann englische Originaltitel bzw. das
-gesamte englische Originalrezept mit deutschem Hinweis. Ein späterer `resend`
-sendet dieselbe endgültige Fassung; Übersetzungsfehler lösen keinen erneuten
-kostenpflichtigen Spoonacular-Abruf aus. Während der Rezeptübersetzung kann
-bereits eine deutsche Statusmeldung erscheinen.
+übersetzt der Bot ausschließlich das ausgewählte Rezept: kurze Rezepte mit
+Zutaten und Schritten gemeinsam, lange in Abschnitten mit Rezepttitel und
+Zutaten als Kontext. Telegram-Polling läuft weiter. Wenn Spoonacular brauchbare
+metrische Mengen zu einer Zutat liefert, bilden diese die Grundlage für die
+deutsche Übersetzung; andernfalls bleibt die originale Mengenangabe erhalten.
+Explizite Fahrenheit-Angaben in den Schritten werden vorher in Celsius
+umgerechnet. Die englischen Originaldaten bleiben für den Rückfall erhalten. Quellen, URLs und Lizenzangaben bleiben
+original. Titel, Bildunterschrift, Zutaten, Zubereitung und Dashboard-Payload
+verwenden dieselbe endgültige Fassung. Lokale Prüfung auf Form, Vollständigkeit
+und Mengen-/Zahlenkonsistenz kann offensichtliche Fehler erkennen, aber keine
+perfekte semantische Übersetzung garantieren. Übersetzungsfortschritt,
+Versuchszähler und Frist überstehen Neustarts. Bei Verbindungsfehlern oder
+fehlgeschlagener Prüfung folgen begrenzte Neuversuche; nach Ausschöpfung der
+Versuche oder Frist gehen englische Originaltitel bzw. das gesamte englische
+Originalrezept mit Hinweis in der gewählten Bediensprache an Telegram (und das
+Originalrezept ans Dashboard). Ein späterer `resend` sendet dieselbe endgültige
+Fassung; Übersetzungsfehler
+lösen keinen erneuten kostenpflichtigen Spoonacular-Abruf aus. Während der
+Rezeptübersetzung kann bereits eine deutsche Statusmeldung erscheinen.
 
 Zum Ausschalten `OLLAMA_URL=` setzen (oder Eintrag entfernen) und den
 Bot-Container neu erstellen; dann gibt es **keinen** Verbindungsversuch zu
@@ -418,8 +450,10 @@ vegetarian days, start time, timezone, and interaction language. `language` must
 be `en`; `sunday_leftovers=true` permits at most six dessert days.
 `OLLAMA_URL` in `.env` enables optional translation; omitted or empty means
 **no translation requests or delay** and English recipe content. Translation
-settings in `settings.json` default to German, `qwen3:1.7b`, three attempts per
-batch, 300 seconds per request and 15 minutes per job.
+settings in `settings.json` default to German, `qwen3:4b`, three attempts per
+batch, 900 seconds per translation including local verification and 60 minutes per job to
+allow for slower Pi inference. Existing explicit settings (including older
+model and deadline values) are not overridden by new defaults.
 
 ## Telegram Setup
 
@@ -468,10 +502,12 @@ the logs with `docker logs -f` (Ctrl+C stops following, not the container).
 Changing `.env` requires **recreating** the container; `docker restart` does
 not reload `--env-file`. To update, pull the new image, stop the bot, back up
 `state.json`, remove the container and rerun the start command. Back up the
-state **before** starting the new image. This release migrates the state to
-version 7. To roll back to a version-6 image, restore its matching version-6
-backup after stopping the bot and before starting the old image. This discards
-state changes made since the backup. The German section contains exact commands.
+state **before** starting the new image. This release migrates state to
+version 8 at startup. Older version-7 and version-6 images cannot read it.
+To roll back, stop the bot and restore the pre-migration backup matching the
+old image's state version (7 or 6) before starting it. A version-8 backup is
+not compatible with either older image. This discards state changes made since
+the backup. The German section contains exact commands.
 
 ### Optional Docker Compose
 
@@ -485,8 +521,9 @@ state bind mount and named Ollama volume remain. The external `bot-network` and
 host configuration must exist first. Without translation, use
 `sudo docker compose -f compose.yaml up -d recipe-bot` and leave `OLLAMA_URL`
 empty. With translation, start Ollama using the `translation` profile, confirm
-`ollama list` succeeds, pull `qwen3:1.7b`, then set
-`OLLAMA_URL=http://ollama:11434` and recreate the bot. Use
+`ollama list` succeeds, pull `qwen3:4b` with
+`sudo docker compose -f compose.yaml --profile translation exec ollama ollama pull qwen3:4b`,
+then set `OLLAMA_URL=http://ollama:11434` and recreate the bot. Use
 `sudo docker compose -f compose.yaml up -d --force-recreate recipe-bot` after
 `.env` changes; `docker compose restart` does not reload environment variables.
 For updates, stop the bot and back up state after pulling the new image and
@@ -513,16 +550,45 @@ Telegram and newer selections replace pending older updates.
 
 Use a 64-bit OS and 8 GB RAM. Run Ollama before starting the bot, following
 the German Docker commands. Wait for `ollama list` to succeed before pulling
-`qwen3:1.7b`. Both containers share `bot-network`; Ollama exposes no host port
-and stores models in the `recipe-ollama` volume. Set `OLLAMA_URL` to
-`http://recipe-ollama:11434` with `docker run`, or `http://ollama:11434` with
-Compose. Recreate the bot after changing `.env`. Benchmark quality and speed
-on the Pi.
+the default `qwen3:4b`:
 
-The bot translates menu titles before sending the menu and the chosen recipe
-after selection. Progress, retries and deadline survive restarts. After three
-failed attempts per batch or the job deadline, it sends the complete English
-original (and English recipe data to the dashboard) with a notice. No additional
+```bash
+sudo docker exec recipe-ollama ollama list && \
+  sudo docker exec recipe-ollama ollama pull qwen3:4b
+```
+
+For Compose, check connectivity and pull the same model:
+
+```bash
+sudo docker compose -f compose.yaml --profile translation exec ollama ollama list && \
+  sudo docker compose -f compose.yaml --profile translation exec ollama ollama pull qwen3:4b
+```
+
+Both containers share `bot-network`; Ollama exposes no host port and stores
+models in the `recipe-ollama` volume. Both deployment examples limit parallel
+requests and loaded models to one (`OLLAMA_NUM_PARALLEL=1`,
+`OLLAMA_MAX_LOADED_MODELS=1`); this does not guarantee available RAM or
+inference speed. Set `OLLAMA_URL` to `http://recipe-ollama:11434` with
+`docker run`, or `http://ollama:11434` with Compose. Recreate the bot after
+changing `.env`. Optionally pull `qwen3:8b` using the same command with its
+tag, then set `"translation_model": "qwen3:8b"` in `settings.json` and restart
+the bot. That model needs about 5.2 GB RAM plus Ollama, context and OS memory;
+on an 8 GB Pi it may trigger swapping or OOM. Test quality, memory use and
+latency on actual recipes rather than assuming better results.
+
+Menu titles are translated before sending. After selection only the chosen
+recipe is translated: shorter recipes translate ingredients and instructions
+together, longer ones in batches with title and ingredients as context. When
+Spoonacular provides usable metric ingredient measures, those are the basis
+for German translation; otherwise the original quantities remain. Explicit
+Fahrenheit temperatures in steps are converted to Celsius first. English
+source data is retained for fallback; sources, URLs and licensing stay
+unchanged. Local checks for shape, completeness and number/quantity consistency
+can catch obvious errors, not guarantee semantic accuracy. Progress, retries
+and deadline survive restarts. After three failed attempts per batch (including
+failed validation) or the job deadline, the bot sends English menu titles or
+the entire English original recipe to Telegram with a notice in the configured
+interaction language, and the original recipe to the dashboard. No additional
 Spoonacular fetch occurs; `resend` reuses the stored final text. Removing
 `OLLAMA_URL` and recreating the bot disables all new translation attempts
 immediately.

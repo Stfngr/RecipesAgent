@@ -24,6 +24,7 @@ services:
     restart: unless-stopped
     environment:
       OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
     volumes:
       - recipe-ollama:/root/.ollama
     networks:

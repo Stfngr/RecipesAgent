@@ -52,6 +52,22 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.store.load().dashboard_pending)
         self.assertEqual(self.store.load().dashboard_updated_at, pending["updated_at"])
 
+    async def test_version_seven_pending_and_session_recipes_migrate(self):
+        await self.select()
+        path = self.store.path
+        legacy = json.loads(path.read_text(encoding="utf-8"))
+        pending = legacy["dashboard_pending"]
+        legacy["version"] = 7
+        for recipe in legacy["session"]["recipes"]:
+            del recipe["metric_ingredients"]
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+        migrated = self.store.load()
+        self.assertEqual(migrated.version, 8)
+        self.assertEqual(migrated.session.recipes[0].metric_ingredients, [])
+        self.assertNotIn("metric_ingredients", migrated.dashboard_pending["payload"]["recipe"])
+        self.assertEqual(migrated.dashboard_pending["updated_at"], pending["updated_at"])
+        self.assertEqual(self.store.load().dashboard_pending, migrated.dashboard_pending)
+
     async def test_automatic_selection_and_skips(self):
         await self.select(automatic=True)
         pending = self.store.load().dashboard_pending
@@ -171,7 +187,7 @@ class ConfigStateTests(unittest.TestCase):
             legacy["version"] = 5
             path.write_text(json.dumps(legacy))
             state = StateStore(path).load()
-            self.assertEqual(state.version, 7)
+            self.assertEqual(state.version, 8)
             self.assertEqual(state.dessert_days_used_this_week, 2)
             self.assertIsNone(state.dashboard_pending)
             corrupt = asdict(state)

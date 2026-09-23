@@ -25,10 +25,10 @@ class Settings:
     interaction_language: str = "de"
     sunday_leftovers: bool = False
     translation_language: str = "de"
-    translation_model: str = "qwen3:1.7b"
+    translation_model: str = "qwen3:4b"
     translation_attempts: int = 3
-    translation_request_timeout_seconds: int = 300
-    translation_job_timeout_minutes: int = 15
+    translation_request_timeout_seconds: int = 900
+    translation_job_timeout_minutes: int = 60
 
     def __post_init__(self):
         for name, low, high in (

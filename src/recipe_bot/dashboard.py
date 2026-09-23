@@ -13,7 +13,9 @@ def selection_update(recipe: Recipe, day: str, automatic: bool, now: float, prev
         timestamp = max(timestamp, datetime.fromisoformat(previous) + timedelta(microseconds=1))
     return {
         "updated_at": timestamp.isoformat(timespec="microseconds"),
-        "payload": {"date": day, "automatic": automatic, "recipe": asdict(recipe)},
+        "payload": {"date": day, "automatic": automatic,
+                    "recipe": {key: value for key, value in asdict(recipe).items()
+                               if key != "metric_ingredients"}},
     }
 
 

@@ -697,7 +697,7 @@ class UnitTests(unittest.TestCase):
                        "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = store.load()
-            self.assertEqual(state.version, 7)
+            self.assertEqual(state.version, 8)
             self.assertEqual(state.dessert_days_used_this_week, 1)
             self.assertNotIn("meat_recipes_chosen_this_week", json.loads(path.read_text(encoding="utf-8")))
 
@@ -708,7 +708,7 @@ class UnitTests(unittest.TestCase):
                       "fetch_day": "", "fetch_attempts": 0, "fetch_retry_at": 0, "version": 2}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 7)
+            self.assertEqual(state.version, 8)
             self.assertEqual(state.sunday_leftovers_day, "")
 
     def test_version_three_session_migrates_photo_delivery_state(self):
@@ -721,13 +721,14 @@ class UnitTests(unittest.TestCase):
             del legacy["dashboard_updated_at"]
             del legacy["session"]["photo_delivered"]
             del legacy["session"]["photo_skipped"]
+            del legacy["session"]["recipes"][0]["metric_ingredients"]
             for name in ("translated_titles", "translated_ingredients", "translated_instructions",
                          "translation_attempts", "translation_retry_at", "translation_deadline",
                          "selected_automatic", "translation_fallback", "selected_title", "translation_model"):
                 del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 7)
+            self.assertEqual(state.version, 8)
             self.assertFalse(state.session.photo_delivered)
             self.assertFalse(state.session.photo_skipped)
 
@@ -740,14 +741,140 @@ class UnitTests(unittest.TestCase):
             del legacy["dashboard_pending"]
             del legacy["dashboard_updated_at"]
             del legacy["session"]["photo_skipped"]
+            del legacy["session"]["recipes"][0]["metric_ingredients"]
             for name in ("translated_titles", "translated_ingredients", "translated_instructions",
                          "translation_attempts", "translation_retry_at", "translation_deadline",
                          "selected_automatic", "translation_fallback", "selected_title", "translation_model"):
                 del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 7)
+            self.assertEqual(state.version, 8)
             self.assertFalse(state.session.photo_skipped)
+
+    def test_version_six_session_migrates_through_v8(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            session = Session("2026-09-07", [recipe()], False, "!bot", "de", 60, ["menu"])
+            legacy = asdict(State(session=session))
+            legacy["version"] = 6
+            del legacy["session"]["recipes"][0]["metric_ingredients"]
+            for name in ("translated_titles", "translated_ingredients", "translated_instructions",
+                         "translation_attempts", "translation_retry_at", "translation_deadline",
+                         "selected_automatic", "translation_fallback", "selected_title", "translation_model"):
+                del legacy["session"][name]
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            state = StateStore(path).load()
+            self.assertEqual(state.version, 8)
+            self.assertEqual(state.session.outbox, ["menu"])
+            self.assertEqual(state.session.recipes[0].metric_ingredients, [])
+
+    def test_version_seven_recipes_migrate_and_persist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            original = recipe()
+            session = Session("2026-09-07", [original], False, "!bot", "en", 60, ["menu"])
+            legacy = asdict(State(session=session))
+            legacy["version"] = 7
+            del legacy["session"]["recipes"][0]["metric_ingredients"]
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            store = StateStore(path)
+            migrated = store.load()
+            self.assertEqual(migrated.version, 8)
+            self.assertEqual(migrated.session.recipes[0].ingredients, ["100 g rice"])
+            self.assertEqual(migrated.session.recipes[0].metric_ingredients, [])
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["session"]["recipes"][0]
+                             ["metric_ingredients"], [])
+            self.assertEqual(store.load().session.recipes[0], migrated.session.recipes[0])
+
+    def test_invalid_v7_recipe_does_not_rewrite_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            session = Session("2026-09-07", [recipe()], False, "!bot", "en", 60, ["menu"])
+            legacy = asdict(State(session=session))
+            legacy["version"] = 7
+            legacy["session"]["recipes"][0]["metric_ingredients"] = ["100 g rice"]
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            original = path.read_text(encoding="utf-8")
+            with self.assertRaises(ValueError):
+                StateStore(path).load()
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_metric_ingredients_survive_state_roundtrip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            converted = Recipe.from_api({
+                "id": 1, "title": "Carrots", "vegetarian": True,
+                "extendedIngredients": [{"original": "2 cups chopped carrots", "measures": {
+                    "metric": {"amount": 300, "unitShort": "g"}}}],
+                "instructions": "Cook.",
+            })
+            session = Session("2026-09-07", [converted], False, "!bot", "en", 60, ["menu"])
+            store = StateStore(path)
+            store.save(State(session=session))
+            loaded = store.load().session.recipes[0]
+            self.assertEqual(loaded.ingredients, ["2 cups chopped carrots"])
+            self.assertEqual(loaded.metric_ingredients, ["300 g chopped carrots"])
+
+    def test_recipe_metric_validation_and_v8_incomplete_state(self):
+        for metric in ("100 g rice", [""], ["100 g rice", "200 g rice"], [3], None):
+            with self.subTest(metric=metric), self.assertRaises(ValueError):
+                Recipe(1, "Rice", True, ["100 g rice"], ["Cook."], metric_ingredients=metric)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            session = Session("2026-09-07", [recipe()], False, "!bot", "en", 60, ["menu"])
+            incomplete = asdict(State(session=session))
+            del incomplete["session"]["recipes"][0]["metric_ingredients"]
+            path.write_text(json.dumps(incomplete), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                StateStore(path).load()
+
+    def test_metric_ingredients_keep_originals_and_descriptive_tails(self):
+        ingredients = [
+            {"original": "2 cups finely chopped carrots", "measures": {
+                "metric": {"amount": 300, "unitShort": "g"}}},
+            {"original": "1/2 cup of fresh milk", "measures": {
+                "metric": {"amount": 120.5, "unitShort": "ml"}}},
+            {"original": "2 tbsp extra virgin olive oil", "measures": {
+                "metric": {"amount": 30, "unitShort": "ml"}}},
+            {"original": "2 Tbs. Dijon mustard", "measures": {
+                "metric": {"amount": 30, "unitShort": "ml"}}},
+            {"original": "1 onion, diced", "measures": {
+                "metric": {"amount": 150, "unitShort": "g"}}},
+            {"original": "salt to taste", "measures": {
+                "metric": {"amount": 2, "unitShort": "g"}}},
+        ]
+        data = {"id": 1, "title": "Soup", "vegetarian": True,
+                "extendedIngredients": ingredients, "instructions": "Simmer."}
+        result = Recipe.from_api(data)
+        self.assertEqual(result.ingredients, [item["original"] for item in ingredients])
+        self.assertEqual(result.metric_ingredients, [
+            "300 g finely chopped carrots", "120.5 ml of fresh milk",
+            "30 ml extra virgin olive oil", "30 ml Dijon mustard", "1 onion, diced", "salt to taste",
+        ])
+        self.assertIn("2 cups finely chopped carrots", details(result, "en", False)[0])
+
+    def test_untrusted_metric_values_fall_back_without_changing_english(self):
+        cases = [
+            (None, "2 cups rice"), ({"amount": 0, "unitShort": "g"}, "2 cups rice"),
+            ({"amount": -1, "unitShort": "g"}, "2 cups rice"),
+            ({"amount": float("inf"), "unitShort": "g"}, "2 cups rice"),
+            ({"amount": float("nan"), "unitShort": "g"}, "2 cups rice"),
+            ({"amount": True, "unitShort": "g"}, "2 cups rice"),
+            ({"amount": "200", "unitShort": "g"}, "2 cups rice"),
+            ({"amount": 200, "unitShort": "tbsp"}, "2 cups rice"),
+            ({"amount": 200, "unitShort": "g extra"}, "2 cups rice"),
+            ({"amount": 200, "unitShort": "g"}, "a cup rice"),
+            ({"amount": 200, "unitShort": "g"}, "2 cups"),
+        ]
+        for metric, original in cases:
+            with self.subTest(metric=metric, original=original):
+                result = Recipe.from_api({
+                    "id": 1, "title": "Rice", "vegetarian": True,
+                    "extendedIngredients": [{"original": original, "measures": {"metric": metric}}],
+                    "instructions": "Cook.",
+                })
+                self.assertEqual(result.ingredients, [original])
+                self.assertEqual(result.metric_ingredients, [original])
 
     def test_partial_state_cannot_reset_counters(self):
         with tempfile.TemporaryDirectory() as directory:

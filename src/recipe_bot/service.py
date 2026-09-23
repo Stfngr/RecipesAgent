@@ -10,6 +10,7 @@ from .config import Settings, WEEKDAYS
 from .dashboard import Dashboard, selection_update
 from .recipes import Recipe, details, is_resend_command, is_skip_command, parse_selection, skipped, summary
 from .state import Session, StateStore
+from .translation import metric_temperatures
 
 log = logging.getLogger(__name__)
 
@@ -252,16 +253,28 @@ class RecipeService:
     def translation_batch(self, session: Session):
         if session.phase == "translating_menu":
             start = len(session.translated_titles)
-            return "translated_titles", [recipe.title for recipe in session.recipes[start:start + 5]]
+            return "translated_titles", [recipe.title for recipe in session.recipes[start:start + 5]], "title", ""
         recipe = session.recipes[session.selected_index]
         if not session.selected_title:
-            return "selected_title", [recipe.title]
-        for field, source in (("translated_ingredients", recipe.ingredients),
-                              ("translated_instructions", recipe.instructions)):
+            return "selected_title", [recipe.title], "title", ""
+        ingredients = recipe.metric_ingredients or recipe.ingredients
+        instructions = [metric_temperatures(step) for step in recipe.instructions]
+        context = f"Recipe title: {recipe.title}. Ingredients: {'; '.join(ingredients)[:1600]}"
+        if not session.translated_ingredients and not session.translated_instructions:
+            texts = [*ingredients, *instructions]
+            if sum(map(len, texts)) <= 3200:
+                return "translated_recipe", texts, "recipe", context
+        for field, source, kind in (("translated_ingredients", ingredients, "ingredient"),
+                                    ("translated_instructions", instructions, "instruction")):
             start = len(getattr(session, field))
             if start < len(source):
-                return field, source[start:start + 4]
-        return None, []
+                batch = []
+                for text in source[start:start + 4]:
+                    if batch and sum(map(len, batch)) + len(text) > 2000:
+                        break
+                    batch.append(text)
+                return field, batch, kind, context
+        return None, [], "", ""
 
     async def translation_worker(self):
         while True:
@@ -281,13 +294,13 @@ class RecipeService:
                     self.translation_changed.clear()
                     batch = None
                 else:
-                    field, texts = self.translation_batch(session)
+                    field, texts, kind, context = self.translation_batch(session)
                     if not texts:
                         self.finish_translation(session, fallback=False)
                         continue
                     session.translation_attempts += 1
                     self.store.save(self.state)
-                    batch = (session, session.phase, field, texts)
+                    batch = (session, session.phase, field, texts, kind, context)
                     wait = 0
             if batch is None:
                 if wait is None:
@@ -298,10 +311,10 @@ class RecipeService:
                     except asyncio.TimeoutError:
                         pass
                 continue
-            session, phase, field, texts = batch
+            session, phase, field, texts, kind, context = batch
             try:
                 translated = await asyncio.wait_for(
-                    self.translator.translate(texts),
+                    self.translator.translate(texts, kind=kind, context=context),
                     timeout=min(self.settings.translation_request_timeout_seconds,
                                 max(0.001, session.translation_deadline - self.clock())),
                 )
@@ -322,6 +335,10 @@ class RecipeService:
                 if self.state.session is session and session.phase == phase:
                     if field == "selected_title":
                         session.selected_title = translated[0]
+                    elif field == "translated_recipe":
+                        count = len(session.recipes[session.selected_index].ingredients)
+                        session.translated_ingredients.extend(translated[:count])
+                        session.translated_instructions.extend(translated[count:])
                     else:
                         getattr(session, field).extend(translated)
                     session.translation_attempts = 0
