@@ -12,7 +12,7 @@ from .config import load_config
 from .dashboard import Dashboard
 from .service import RecipeService
 from .state import StateStore
-from .translation import OllamaTranslator
+from .translation import LibreTranslateTranslator
 
 TEST_MESSAGE = "Rezept-Bot: Telegram-Test erfolgreich."
 
@@ -24,9 +24,10 @@ async def run(settings, credentials, state_path):
             Telegram(client, credentials.telegram_token, credentials.chat_id),
             dashboard=(Dashboard(client, credentials.dashboard_url, credentials.dashboard_token)
                        if credentials.dashboard_url else None),
-            translator=(OllamaTranslator(client, credentials.ollama_url, settings.translation_model,
-                                         settings.translation_request_timeout_seconds)
-                        if credentials.ollama_url else None),
+            translator=(LibreTranslateTranslator(client, credentials.libretranslate_url,
+                                                 settings.translation_language,
+                                                 settings.translation_request_timeout_seconds)
+                        if credentials.libretranslate_url else None),
         )
         task = asyncio.create_task(service.run())
         loop = asyncio.get_running_loop()

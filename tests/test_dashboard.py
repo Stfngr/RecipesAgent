@@ -62,7 +62,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             del recipe["metric_ingredients"]
         path.write_text(json.dumps(legacy), encoding="utf-8")
         migrated = self.store.load()
-        self.assertEqual(migrated.version, 8)
+        self.assertEqual(migrated.version, 9)
         self.assertEqual(migrated.session.recipes[0].metric_ingredients, [])
         self.assertNotIn("metric_ingredients", migrated.dashboard_pending["payload"]["recipe"])
         self.assertEqual(migrated.dashboard_pending["updated_at"], pending["updated_at"])
@@ -187,7 +187,7 @@ class ConfigStateTests(unittest.TestCase):
             legacy["version"] = 5
             path.write_text(json.dumps(legacy))
             state = StateStore(path).load()
-            self.assertEqual(state.version, 8)
+            self.assertEqual(state.version, 9)
             self.assertEqual(state.dessert_days_used_this_week, 2)
             self.assertIsNone(state.dashboard_pending)
             corrupt = asdict(state)

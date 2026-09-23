@@ -17,22 +17,23 @@ services:
     networks:
       - bot-network
 
-  ollama:
-    image: ollama/ollama:latest
+  libretranslate:
+    image: libretranslate/libretranslate:v1.9.6
     profiles:
       - translation
     restart: unless-stopped
     environment:
-      OLLAMA_NUM_PARALLEL: "1"
-      OLLAMA_MAX_LOADED_MODELS: "1"
+      LT_LOAD_ONLY: "en,de"
+      LT_DISABLE_WEB_UI: "true"
+      LT_THREADS: "1"
     volumes:
-      - recipe-ollama:/root/.ollama
+      - recipe-libretranslate:/home/libretranslate/.local
     networks:
       - bot-network
 
 volumes:
-  recipe-ollama:
-    name: recipe-ollama
+  recipe-libretranslate:
+    name: recipe-libretranslate
 
 networks:
   bot-network:

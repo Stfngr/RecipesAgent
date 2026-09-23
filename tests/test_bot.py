@@ -697,7 +697,7 @@ class UnitTests(unittest.TestCase):
                        "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = store.load()
-            self.assertEqual(state.version, 8)
+            self.assertEqual(state.version, 9)
             self.assertEqual(state.dessert_days_used_this_week, 1)
             self.assertNotIn("meat_recipes_chosen_this_week", json.loads(path.read_text(encoding="utf-8")))
 
@@ -708,7 +708,7 @@ class UnitTests(unittest.TestCase):
                       "fetch_day": "", "fetch_attempts": 0, "fetch_retry_at": 0, "version": 2}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 8)
+            self.assertEqual(state.version, 9)
             self.assertEqual(state.sunday_leftovers_day, "")
 
     def test_version_three_session_migrates_photo_delivery_state(self):
@@ -724,11 +724,11 @@ class UnitTests(unittest.TestCase):
             del legacy["session"]["recipes"][0]["metric_ingredients"]
             for name in ("translated_titles", "translated_ingredients", "translated_instructions",
                          "translation_attempts", "translation_retry_at", "translation_deadline",
-                         "selected_automatic", "translation_fallback", "selected_title", "translation_model"):
+                         "selected_automatic", "translation_fallback", "selected_title"):
                 del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 8)
+            self.assertEqual(state.version, 9)
             self.assertFalse(state.session.photo_delivered)
             self.assertFalse(state.session.photo_skipped)
 
@@ -744,11 +744,11 @@ class UnitTests(unittest.TestCase):
             del legacy["session"]["recipes"][0]["metric_ingredients"]
             for name in ("translated_titles", "translated_ingredients", "translated_instructions",
                          "translation_attempts", "translation_retry_at", "translation_deadline",
-                         "selected_automatic", "translation_fallback", "selected_title", "translation_model"):
+                         "selected_automatic", "translation_fallback", "selected_title"):
                 del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 8)
+            self.assertEqual(state.version, 9)
             self.assertFalse(state.session.photo_skipped)
 
     def test_version_six_session_migrates_through_v8(self):
@@ -760,11 +760,11 @@ class UnitTests(unittest.TestCase):
             del legacy["session"]["recipes"][0]["metric_ingredients"]
             for name in ("translated_titles", "translated_ingredients", "translated_instructions",
                          "translation_attempts", "translation_retry_at", "translation_deadline",
-                         "selected_automatic", "translation_fallback", "selected_title", "translation_model"):
+                         "selected_automatic", "translation_fallback", "selected_title"):
                 del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 8)
+            self.assertEqual(state.version, 9)
             self.assertEqual(state.session.outbox, ["menu"])
             self.assertEqual(state.session.recipes[0].metric_ingredients, [])
 
@@ -779,7 +779,7 @@ class UnitTests(unittest.TestCase):
             path.write_text(json.dumps(legacy), encoding="utf-8")
             store = StateStore(path)
             migrated = store.load()
-            self.assertEqual(migrated.version, 8)
+            self.assertEqual(migrated.version, 9)
             self.assertEqual(migrated.session.recipes[0].ingredients, ["100 g rice"])
             self.assertEqual(migrated.session.recipes[0].metric_ingredients, [])
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["session"]["recipes"][0]

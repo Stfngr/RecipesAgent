@@ -123,7 +123,6 @@ class RecipeService:
             phase="translating_menu" if self.translator else "announcing",
             translation_deadline=(self.clock() + self.settings.translation_job_timeout_minutes * 60
                                   if self.translator else 0),
-            translation_model=self.settings.translation_model if self.translator else "",
         )
         self.state.dessert_days_used_this_week += int(dessert)
         self.store.save(self.state)
@@ -188,7 +187,7 @@ class RecipeService:
             session.selected_title = session.translated_titles[index]
         session.translation_attempts = 0
         session.translation_retry_at = 0
-        if self.translator and session.translation_model == self.settings.translation_model:
+        if self.translator:
             session.phase = "translating_recipe"
             session.translation_deadline = self.clock() + self.settings.translation_job_timeout_minutes * 60
             session.outbox = ["Rezept ausgewählt. Übersetzung läuft." if session.language == "de"
@@ -253,19 +252,18 @@ class RecipeService:
     def translation_batch(self, session: Session):
         if session.phase == "translating_menu":
             start = len(session.translated_titles)
-            return "translated_titles", [recipe.title for recipe in session.recipes[start:start + 5]], "title", ""
+            return "translated_titles", [recipe.title for recipe in session.recipes[start:start + 5]]
         recipe = session.recipes[session.selected_index]
         if not session.selected_title:
-            return "selected_title", [recipe.title], "title", ""
+            return "selected_title", [recipe.title]
         ingredients = recipe.metric_ingredients or recipe.ingredients
         instructions = [metric_temperatures(step) for step in recipe.instructions]
-        context = f"Recipe title: {recipe.title}. Ingredients: {'; '.join(ingredients)[:1600]}"
         if not session.translated_ingredients and not session.translated_instructions:
             texts = [*ingredients, *instructions]
             if sum(map(len, texts)) <= 3200:
-                return "translated_recipe", texts, "recipe", context
-        for field, source, kind in (("translated_ingredients", ingredients, "ingredient"),
-                                    ("translated_instructions", instructions, "instruction")):
+                return "translated_recipe", texts
+        for field, source in (("translated_ingredients", ingredients),
+                              ("translated_instructions", instructions)):
             start = len(getattr(session, field))
             if start < len(source):
                 batch = []
@@ -273,8 +271,8 @@ class RecipeService:
                     if batch and sum(map(len, batch)) + len(text) > 2000:
                         break
                     batch.append(text)
-                return field, batch, kind, context
-        return None, [], "", ""
+                return field, batch
+        return None, []
 
     async def translation_worker(self):
         while True:
@@ -285,7 +283,6 @@ class RecipeService:
                     wait = None
                     batch = None
                 elif (self.clock() >= session.translation_deadline or self.translator is None
-                      or session.translation_model != self.settings.translation_model
                       or session.translation_attempts >= self.settings.translation_attempts):
                     self.finish_translation(session, fallback=True)
                     continue
@@ -294,13 +291,13 @@ class RecipeService:
                     self.translation_changed.clear()
                     batch = None
                 else:
-                    field, texts, kind, context = self.translation_batch(session)
+                    field, texts = self.translation_batch(session)
                     if not texts:
                         self.finish_translation(session, fallback=False)
                         continue
                     session.translation_attempts += 1
                     self.store.save(self.state)
-                    batch = (session, session.phase, field, texts, kind, context)
+                    batch = (session, session.phase, field, texts)
                     wait = 0
             if batch is None:
                 if wait is None:
@@ -311,16 +308,16 @@ class RecipeService:
                     except asyncio.TimeoutError:
                         pass
                 continue
-            session, phase, field, texts, kind, context = batch
+            session, phase, field, texts = batch
             try:
                 translated = await asyncio.wait_for(
-                    self.translator.translate(texts, kind=kind, context=context),
+                    self.translator.translate(texts),
                     timeout=min(self.settings.translation_request_timeout_seconds,
                                 max(0.001, session.translation_deadline - self.clock())),
                 )
             except (APIError, asyncio.TimeoutError) as error:
                 if isinstance(error, asyncio.TimeoutError):
-                    error = APIError("Ollama translation timeout")
+                    error = APIError("LibreTranslate timeout")
                 async with self.lock:
                     if self.state.session is session and session.phase == phase:
                         log.warning("%s; translation attempt %s", error, session.translation_attempts)

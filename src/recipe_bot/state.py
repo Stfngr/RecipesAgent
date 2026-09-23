@@ -41,7 +41,6 @@ class Session:
     selected_automatic: bool = False
     translation_fallback: bool = False
     selected_title: str = ""
-    translation_model: str = ""
 
     def __post_init__(self):
         date.fromisoformat(self.day)
@@ -78,10 +77,8 @@ class Session:
                 not isinstance(item, str) or not item.strip() for item in items
             ):
                 raise ValueError("Invalid translated recipe content")
-        if not isinstance(self.selected_title, str) or not isinstance(self.translation_model, str):
+        if not isinstance(self.selected_title, str):
             raise ValueError("Invalid translation metadata")
-        if self.phase in ("translating_menu", "translating_recipe") and not self.translation_model:
-            raise ValueError("Missing translation model")
         if (type(self.translation_attempts) is not int or self.translation_attempts < 0
                 or any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
                        for value in (self.translation_retry_at, self.translation_deadline))
@@ -113,10 +110,10 @@ class State:
     sunday_leftovers_day: str = ""
     dashboard_pending: dict | None = None
     dashboard_updated_at: str = ""
-    version: int = field(default=8)
+    version: int = field(default=9)
 
     def __post_init__(self):
-        if self.version != 8:
+        if self.version != 9:
             raise ValueError("Unsupported state version")
         if self.week and not re.fullmatch(r"[0-9]{4}-W[0-9]{2}", self.week):
             raise ValueError("Invalid state week")
@@ -218,6 +215,13 @@ class StateStore:
                         raise ValueError("Incomplete or unsupported recipe")
                     recipe["metric_ingredients"] = []
             data["version"] = 8
+            migrated = True
+        if data.get("version") == 8 and set(data) == current_fields:
+            if data["session"] is not None:
+                if not isinstance(data["session"], dict):
+                    raise ValueError("Incomplete or unsupported session")
+                data["session"].pop("translation_model", None)
+            data["version"] = 9
             migrated = True
         if set(data) != current_fields:
             raise ValueError("Incomplete or unsupported state file")
