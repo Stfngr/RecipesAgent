@@ -359,8 +359,8 @@ DASHBOARD_URL=http://home-dashboard-api:8000
 DASHBOARD_TOKEN=derselbe-token-wie-im-home-dashboard
 ```
 
-Container im gemeinsamen `bot-network` starten. Neue manuelle und automatische
-Auswahl erzeugen einen persistenten Dashboard-Auftrag.
+Container im gemeinsamen `bot-network` starten. Jede Auswahl erzeugt einen
+persistenten Dashboard-Auftrag.
 Kandidaten, Auslassen und Restesonntage ersetzen das angezeigte Rezept nicht.
 Fehler blockieren Telegram nicht; neuere Auswahl ersetzt ältere offene Updates.
 
@@ -553,8 +553,8 @@ cooldowns do not block selection or deadline processing.
 ### Home Dashboard
 
 Set both `DASHBOARD_URL=http://home-dashboard-api:8000` and
-`DASHBOARD_TOKEN`, then run the container on external `bot-network`. Manual and
-automatic selections are persisted for dashboard delivery; failures never block
+`DASHBOARD_TOKEN`, then run the container on external `bot-network`. Every
+selection is persisted for dashboard delivery; failures never block
 Telegram and newer selections replace pending older updates.
 
 ### Optional LibreTranslate translation on Raspberry Pi 4
