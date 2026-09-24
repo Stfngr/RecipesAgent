@@ -254,10 +254,6 @@ class RecipeService:
             return "selected_title", [recipe.title]
         ingredients = recipe.metric_ingredients or recipe.ingredients
         instructions = [metric_temperatures(step) for step in recipe.instructions]
-        if not session.translated_ingredients and not session.translated_instructions:
-            texts = [*ingredients, *instructions]
-            if sum(map(len, texts)) <= 3200:
-                return "translated_recipe", texts
         for field, source in (("translated_ingredients", ingredients),
                               ("translated_instructions", instructions)):
             start = len(getattr(session, field))
@@ -328,10 +324,6 @@ class RecipeService:
                 if self.state.session is session and session.phase == phase:
                     if field == "selected_title":
                         session.selected_title = translated[0]
-                    elif field == "translated_recipe":
-                        count = len(session.recipes[session.selected_index].ingredients)
-                        session.translated_ingredients.extend(translated[:count])
-                        session.translated_instructions.extend(translated[count:])
                     else:
                         getattr(session, field).extend(translated)
                     session.translation_attempts = 0

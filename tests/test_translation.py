@@ -168,8 +168,9 @@ class TranslationServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.menu()
         await self.select()
         await self.wait_for(lambda: self.service.state.session.phase == "delivering")
-        translated = self.translator.translate.await_args_list[-1]
-        self.assertEqual(translated.args[0], ["125 g flour", "Bake at 175 °C for 20 minutes."])
+        self.assertEqual(self.translator.translate.await_args_list[-2].args[0], ["125 g flour"])
+        self.assertEqual(self.translator.translate.await_args_list[-1].args[0],
+                         ["Bake at 175 °C for 20 minutes."])
         await self.service.tick()
         self.assertIn("DE 125 g flour", self.telegram.messages[-1])
         self.assertIn("DE Bake at 175 °C", self.telegram.messages[-1])
@@ -315,6 +316,42 @@ class TranslationServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.wait_for(lambda: self.service.state.session.phase == "announcing")
         self.translator.translate.assert_awaited_once_with(["Recipe 6"])
         self.assertEqual(len(self.api.filters), 1)
+
+    async def test_recovery_resumes_partial_recipe_chunk_translation(self):
+        converted = recipe()
+        converted.ingredients = ["Flour", "Sugar", "Eggs", "Butter", "Milk", "Salt"]
+        converted.metric_ingredients = ["125 g flour", "200 g sugar", "2 eggs", "100 g butter",
+                                        "250 ml milk", "5 g salt"]
+        converted.instructions = ["Mix ingredients.", "Bake for 20 minutes."]
+        self.api.recipes = AsyncMock(return_value=[converted, recipe(2)])
+        started, release = asyncio.Event(), asyncio.Event()
+        async def translate(texts):
+            if texts == ["250 ml milk", "5 g salt"]:
+                started.set()
+                await release.wait()
+            return [f"DE {text}" for text in texts]
+        self.translator.translate.side_effect = translate
+        worker = await self.menu()
+        await self.select()
+        await asyncio.wait_for(started.wait(), 2)
+        self.assertEqual(self.store.load().session.translated_ingredients,
+                         ["DE 125 g flour", "DE 200 g sugar", "DE 2 eggs", "DE 100 g butter"])
+        await self.stop_worker(worker)
+        self.translator = AsyncMock()
+        async def remaining(texts):
+            return [f"DE {text}" for text in texts]
+        self.translator.translate.side_effect = remaining
+        self.service = self.build()
+        await self.start_worker()
+        await self.wait_for(lambda: self.service.state.session.phase == "delivering")
+        self.assertEqual(self.translator.translate.await_args_list[0].args[0],
+                         ["250 ml milk", "5 g salt"])
+        self.assertEqual(self.translator.translate.await_args_list[1].args[0],
+                         ["Mix ingredients.", "Bake for 20 minutes."])
+        await self.service.tick()
+        self.assertIn("DE 125 g flour", self.telegram.messages[-1])
+        self.assertIn("DE 5 g salt", self.telegram.messages[-1])
+        self.assertIn("DE Bake for 20 minutes.", self.telegram.messages[-1])
 
     async def test_translation_does_not_hold_selection_lock(self):
         await self.menu()
