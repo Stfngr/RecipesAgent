@@ -43,5 +43,5 @@ class Dashboard:
             self.client, "PUT", self.url, "Home Dashboard", json=update,
             headers={"Authorization": f"Bearer {self.token}"}, timeout=10,
         )
-        if type(data.get("applied")) is not bool:
-            raise APIError("Home Dashboard response validation")
+        if data.get("applied") is not True:
+            raise APIError("Home Dashboard rejected update")

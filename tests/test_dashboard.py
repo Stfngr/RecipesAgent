@@ -141,10 +141,15 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.url.path, "/api/v1/state/recipe-bot/current-recipe")
             self.assertEqual(request.headers["Authorization"], "Bearer private-token")
             self.assertEqual(json.loads(request.content), pending)
-            return httpx.Response(200, json={"applied": False})
+            return httpx.Response(200, json={"applied": True})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             await Dashboard(client, "http://home-dashboard-api:8000/", "private-token").publish(pending)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"applied": False})
+        )) as client:
+            with self.assertRaises(APIError):
+                await Dashboard(client, "http://home-dashboard-api:8000", "private-token").publish(pending)
         async with httpx.AsyncClient(transport=httpx.MockTransport(
             lambda request: httpx.Response(401, json={"detail": "private-token"})
         )) as client:
