@@ -25,7 +25,7 @@ services:
     environment:
       LT_LOAD_ONLY: "en,de"
       LT_DISABLE_WEB_UI: "true"
-      LT_THREADS: "1"
+      LT_THREADS: "4"
     volumes:
       - recipe-libretranslate:/home/libretranslate/.local
     networks:
