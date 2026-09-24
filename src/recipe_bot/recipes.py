@@ -52,7 +52,7 @@ def metric_ingredient(original: str, item: dict) -> str:
     if (type(amount) not in (int, float) or not 0 < amount <= 1000000
             or not math.isfinite(amount) or not isinstance(unit, str) or unit not in _METRIC_UNITS):
         return original
-    quantity = format(Decimal(str(amount)), "f")
+    quantity = format(Decimal(str(amount)).normalize(), "f")
     return f"{quantity} {unit} {match['tail']}"
 
 

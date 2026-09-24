@@ -880,7 +880,7 @@ class UnitTests(unittest.TestCase):
             {"original": "1/2 cup of fresh milk", "measures": {
                 "metric": {"amount": 120.5, "unitShort": "ml"}}},
             {"original": "2 tbsp extra virgin olive oil", "measures": {
-                "metric": {"amount": 30, "unitShort": "ml"}}},
+                "metric": {"amount": 30.0, "unitShort": "ml"}}},
             {"original": "2 Tbs. Dijon mustard", "measures": {
                 "metric": {"amount": 30, "unitShort": "ml"}}},
             {"original": "1 onion, diced", "measures": {
