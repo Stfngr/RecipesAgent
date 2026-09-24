@@ -21,6 +21,7 @@ class Settings:
     language: str = "en"
     trigger_codeword: str = "!bot"
     vegetarian_days: tuple[str, ...] = ()
+    additional_include_tags: tuple[str, ...] = ()
     dessert_days_per_week: int = 2
     interaction_language: str = "de"
     sunday_leftovers: bool = False
@@ -48,6 +49,14 @@ class Settings:
         if len(set(self.vegetarian_days)) != len(self.vegetarian_days):
             raise ValueError("vegetarian_days must not contain duplicates")
         object.__setattr__(self, "vegetarian_days", tuple(self.vegetarian_days))
+        if not isinstance(self.additional_include_tags, (list, tuple)) or any(
+            not isinstance(tag, str) or not re.fullmatch(r"[a-z0-9]+(?:[ -][a-z0-9]+)*", tag)
+            for tag in self.additional_include_tags
+        ):
+            raise ValueError("additional_include_tags must contain lowercase Spoonacular tag names")
+        if len(set(self.additional_include_tags)) != len(self.additional_include_tags):
+            raise ValueError("additional_include_tags must not contain duplicates")
+        object.__setattr__(self, "additional_include_tags", tuple(self.additional_include_tags))
         if not isinstance(self.start_time, str) or not re.fullmatch(
             r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", self.start_time
         ):

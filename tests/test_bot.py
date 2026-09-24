@@ -53,7 +53,7 @@ class FakeRecipes:
         self.fail = None
         self.on_fetch = None
 
-    async def recipes(self, count, vegetarian_only):
+    async def recipes(self, count, vegetarian_only, extra_include_tags=()):
         self.filters.append(vegetarian_only)
         if self.on_fetch:
             self.on_fetch()
@@ -655,12 +655,20 @@ class UnitTests(unittest.TestCase):
                         {"vegetarian_days": "monday"}, {"dessert_days_per_week": -1},
                         {"trigger_codeword": "two words"}, {"language": "de"},
                         {"interaction_language": "fr"}, {"sunday_leftovers": 1},
-                        {"sunday_leftovers": True, "dessert_days_per_week": 7}):
+                        {"sunday_leftovers": True, "dessert_days_per_week": 7},
+                        {"additional_include_tags": ["italian", "italian"]},
+                        {"additional_include_tags": ["Italian"]},
+                        {"additional_include_tags": ["italian,vegan"]},
+                        {"additional_include_tags": "italian"}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 Settings(**kwargs)
 
     def test_vegetarian_days_accepts_an_empty_json_list(self):
         self.assertEqual(Settings(vegetarian_days=[]).vegetarian_days, ())
+
+    def test_additional_include_tags_accepts_valid_tags(self):
+        settings = Settings(additional_include_tags=["italian", "gluten-free"])
+        self.assertEqual(settings.additional_include_tags, ("italian", "gluten-free"))
 
     def test_year_aware_week_reset(self):
         self.assertEqual(week_key(datetime(2027, 1, 1).date()), "2026-W53")
@@ -943,6 +951,13 @@ class APITests(unittest.IsolatedAsyncioTestCase):
             recipes = await Spoonacular(client, "secret").recipes(1, True)
         self.assertEqual(recipes[0].instructions, ["Cook rice."])
         self.assertEqual(recipes[0].image_url, "https://images.example/rice.jpg")
+
+    async def test_extra_include_tags_are_appended(self):
+        def handle(request):
+            self.assertEqual(request.url.params["include-tags"], "main course,italian,gluten-free")
+            return httpx.Response(200, json={"recipes": [self.response_recipe()]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            await Spoonacular(client, "secret").recipes(1, False, ("italian", "gluten-free"))
 
     async def test_unsafe_missing_or_incomplete_recipes_rejected(self):
         invalid = [self.response_recipe(False), {**self.response_recipe(), "vegetarian": None},

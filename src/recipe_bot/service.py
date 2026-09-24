@@ -96,7 +96,9 @@ class RecipeService:
         self.store.save(self.state)
         vegetarian_only = WEEKDAYS[date.fromisoformat(day).weekday()] in self.settings.vegetarian_days
         try:
-            recipes = await self.recipes.recipes(self.settings.recipes_per_day, vegetarian_only)
+            recipes = await self.recipes.recipes(
+                self.settings.recipes_per_day, vegetarian_only, self.settings.additional_include_tags
+            )
         except APIError as error:
             self.state.fetch_retry_at = self.clock() + max(300, error.retry_after)
             if error.status in (401, 402, 403):

@@ -55,7 +55,9 @@ zu einem Container mit demselben Telegram-Token ausführen.
 
 `settings.json.example` definiert 1-100 Rezepte, 1-1439 aktive Minuten, 0-7
 Desserttage, `vegetarian_days`, Startzeit, IANA-Zeitzone und
-`interaction_language`. `language` muss `en` sein. Mit
+`interaction_language`. `additional_include_tags` ergänzt die an Spoonacular
+gesendeten `include-tags` (z. B. `["italian"]`) um weitere Spoonacular-Tags in
+Kleinschreibung; Standard ist eine leere Liste. `language` muss `en` sein. Mit
 `sunday_leftovers=true` sind höchstens sechs Desserttage zulässig.
 `translation_language` muss `de` sein. Für die LibreTranslate-Übersetzung
 gelten 3 Versuche je Abschnitt, 30 Sekunden je Übersetzungsanfrage und 15
@@ -439,8 +441,11 @@ state file. Do not run local and container instances with the same token.
 ## Configuration
 
 `settings.json.example` defines recipe count, active window, dessert quota,
-vegetarian days, start time, timezone, and interaction language. `language` must
-be `en`; `sunday_leftovers=true` permits at most six dessert days.
+vegetarian days, start time, timezone, and interaction language.
+`additional_include_tags` appends extra lowercase Spoonacular tags (e.g.
+`["italian"]`) to the `include-tags` sent to Spoonacular; it defaults to an
+empty list. `language` must be `en`; `sunday_leftovers=true` permits at most
+six dessert days.
 `LIBRETRANSLATE_URL` in `.env` enables optional translation; omitted or empty
 means **no translation requests or delay** and English recipe content.
 Translation settings in `settings.json` default to German, three attempts per

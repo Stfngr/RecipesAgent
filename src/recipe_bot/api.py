@@ -39,10 +39,13 @@ class Spoonacular:
         self.client = client
         self.key = key
 
-    async def recipes(self, count: int, vegetarian_only: bool) -> list[Recipe]:
-        params = {"number": count, "include-tags": "main course"}
+    async def recipes(self, count: int, vegetarian_only: bool,
+                       extra_include_tags: tuple[str, ...] = ()) -> list[Recipe]:
+        tags = ["main course"]
         if vegetarian_only:
-            params["include-tags"] += ",vegetarian"
+            tags.append("vegetarian")
+        tags.extend(extra_include_tags)
+        params = {"number": count, "include-tags": ",".join(tags)}
         data = await request_json(
             self.client, "GET", "https://api.spoonacular.com/recipes/random", "Spoonacular",
             headers={"x-api-key": self.key}, params=params,
