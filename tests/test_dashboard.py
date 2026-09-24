@@ -31,21 +31,16 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
         return RecipeService(Settings(recipes_per_day=2), self.store, FakeRecipes(), self.telegram,
                              clock=lambda: self.now, dashboard=self.dashboard)
 
-    async def select(self, automatic=False):
+    async def select(self):
         await self.service.tick()
-        if automatic:
-            self.now = self.service.state.session.deadline
-            await self.service.tick()
-        else:
-            await self.service.handle_update({"message": {
-                "chat": {"id": self.telegram.chat_id}, "text": "!bot 1", "date": int(self.now)
-            }})
+        await self.service.handle_update({"message": {
+            "chat": {"id": self.telegram.chat_id}, "text": "!bot 1", "date": int(self.now)
+        }})
 
     async def test_manual_selection_persisted_and_restart_delivers(self):
         await self.select()
         pending = self.store.load().dashboard_pending
         self.assertEqual(pending["payload"]["recipe"]["title"], "Recipe 1")
-        self.assertFalse(pending["payload"]["automatic"])
         self.service = self.build()
         await self.service.publish_dashboard()
         self.dashboard.publish.assert_awaited_once_with(pending)
@@ -62,16 +57,15 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             del recipe["metric_ingredients"]
         path.write_text(json.dumps(legacy), encoding="utf-8")
         migrated = self.store.load()
-        self.assertEqual(migrated.version, 9)
+        self.assertEqual(migrated.version, 10)
         self.assertEqual(migrated.session.recipes[0].metric_ingredients, [])
         self.assertNotIn("metric_ingredients", migrated.dashboard_pending["payload"]["recipe"])
         self.assertEqual(migrated.dashboard_pending["updated_at"], pending["updated_at"])
         self.assertEqual(self.store.load().dashboard_pending, migrated.dashboard_pending)
 
-    async def test_automatic_selection_and_skips(self):
-        await self.select(automatic=True)
+    async def test_dashboard_pending_survives_a_later_skip(self):
+        await self.select()
         pending = self.store.load().dashboard_pending
-        self.assertTrue(pending["payload"]["automatic"])
         self.now += 86400
         await self.service.tick()
         self.service.skip()
@@ -104,7 +98,7 @@ class DashboardTests(unittest.IsolatedAsyncioTestCase):
             self.now += 86400
             await self.service.tick()
             self.now -= 86400 * 2
-            self.service.resolve(1, automatic=True)
+            self.service.resolve(1)
             newer = self.store.load().dashboard_pending
             self.assertGreater(datetime.fromisoformat(newer["updated_at"]),
                                datetime.fromisoformat(old["updated_at"]))
@@ -187,7 +181,7 @@ class ConfigStateTests(unittest.TestCase):
             legacy["version"] = 5
             path.write_text(json.dumps(legacy))
             state = StateStore(path).load()
-            self.assertEqual(state.version, 9)
+            self.assertEqual(state.version, 10)
             self.assertEqual(state.dessert_days_used_this_week, 2)
             self.assertIsNone(state.dashboard_pending)
             corrupt = asdict(state)

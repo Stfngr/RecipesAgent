@@ -7,13 +7,13 @@ from .api import APIError, request_json
 from .recipes import Recipe
 
 
-def selection_update(recipe: Recipe, day: str, automatic: bool, now: float, previous: str) -> dict:
+def selection_update(recipe: Recipe, day: str, now: float, previous: str) -> dict:
     timestamp = datetime.fromtimestamp(now, timezone.utc)
     if previous:
         timestamp = max(timestamp, datetime.fromisoformat(previous) + timedelta(microseconds=1))
     return {
         "updated_at": timestamp.isoformat(timespec="microseconds"),
-        "payload": {"date": day, "automatic": automatic,
+        "payload": {"date": day,
                     "recipe": {key: value for key, value in asdict(recipe).items()
                                if key != "metric_ingredients"}},
     }
@@ -26,11 +26,9 @@ def validate_update(update: dict):
     if timestamp.tzinfo is None:
         raise ValueError("Dashboard timestamp must include timezone")
     payload = update["payload"]
-    if not isinstance(payload, dict) or set(payload) != {"date", "automatic", "recipe"}:
+    if not isinstance(payload, dict) or set(payload) != {"date", "recipe"}:
         raise ValueError("Invalid dashboard payload")
     date.fromisoformat(payload["date"])
-    if type(payload["automatic"]) is not bool:
-        raise ValueError("Invalid dashboard selection")
     Recipe(**payload["recipe"])
 
 

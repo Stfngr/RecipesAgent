@@ -2,7 +2,6 @@
   "recipes_per_day": 5,
   "start_time": "08:00",
   "timezone": "Europe/Berlin",
-  "active_window_minutes": 60,
   "language": "en",
   "trigger_codeword": "!bot",
   "vegetarian_days": ["monday", "friday"],

@@ -6,6 +6,7 @@
 - Maintain explicit state migrations when changing `State` or `Session` schemas. Bump `State.version`, accept only known prior shapes, and test every migration.
 - Preserve paid Spoonacular request budget: store attempt count and retry time before every request; limit to three attempts per local day.
 - Do not hold `RecipeService.lock` during network I/O. Preserve first-valid-selection-wins behavior.
-- Telegram cooldown applies to all Telegram sends and polling failures. Selection and deadline resolution must still proceed during delivery cooldown.
+- Telegram cooldown applies to all Telegram sends and polling failures. Selection resolution must still proceed during delivery cooldown.
+- Selection has no time limit; only an explicit number, skip (`0`), or `restart` command changes a session's phase.
 - Dashboard delivery is durable and independent from Telegram: selection queues a persistent update; dashboard failures must not prevent Telegram delivery.
 - Persist translation progress and retry budgets before LibreTranslate I/O. Do not hold `RecipeService.lock` during translation calls. After exhaustion, use the complete English original for both Telegram and Dashboard.

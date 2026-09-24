@@ -17,7 +17,6 @@ class Settings:
     recipes_per_day: int = 5
     start_time: str = "08:00"
     timezone: str = "Europe/Berlin"
-    active_window_minutes: int = 60
     language: str = "en"
     trigger_codeword: str = "!bot"
     vegetarian_days: tuple[str, ...] = ()
@@ -33,7 +32,6 @@ class Settings:
     def __post_init__(self):
         for name, low, high in (
             ("recipes_per_day", 1, 100),
-            ("active_window_minutes", 1, 1439),
             ("dessert_days_per_week", 0, 7),
             ("translation_attempts", 1, 10),
             ("translation_request_timeout_seconds", 1, 3600),

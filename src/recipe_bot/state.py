@@ -23,12 +23,10 @@ class Session:
     dessert: bool
     trigger: str
     language: str
-    window_minutes: int
     outbox: list[str]
     phase: str = "announcing"
     next_message: int = 0
     opened_at: float | None = None
-    deadline: float | None = None
     selected_index: int | None = None
     photo_delivered: bool = False
     photo_skipped: bool = False
@@ -38,7 +36,6 @@ class Session:
     translation_attempts: int = 0
     translation_retry_at: float = 0
     translation_deadline: float = 0
-    selected_automatic: bool = False
     translation_fallback: bool = False
     selected_title: str = ""
 
@@ -52,8 +49,6 @@ class Session:
             raise ValueError("Invalid session settings")
         if not isinstance(self.trigger, str) or not re.fullmatch(r"\S{1,32}", self.trigger):
             raise ValueError("Invalid session trigger")
-        if type(self.window_minutes) is not int or not 1 <= self.window_minutes <= 1439:
-            raise ValueError("Invalid session window")
         if self.phase not in ("translating_menu", "announcing", "active", "translating_recipe",
                               "delivering", "skipping", "done", "skipped"):
             raise ValueError("Invalid session phase")
@@ -82,16 +77,13 @@ class Session:
         if (type(self.translation_attempts) is not int or self.translation_attempts < 0
                 or any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
                        for value in (self.translation_retry_at, self.translation_deadline))
-                or type(self.selected_automatic) is not bool or type(self.translation_fallback) is not bool):
+                or type(self.translation_fallback) is not bool):
             raise ValueError("Invalid translation state")
         if self.phase in ("translating_menu", "translating_recipe") and self.translation_deadline <= 0:
             raise ValueError("Invalid translation deadline")
         if self.phase not in ("announcing", "translating_menu"):
-            for value in (self.opened_at, self.deadline):
-                if type(value) not in (int, float) or not math.isfinite(value):
-                    raise ValueError("Invalid session deadline")
-            if self.deadline <= self.opened_at:
-                raise ValueError("Deadline must follow opening time")
+            if type(self.opened_at) not in (int, float) or not math.isfinite(self.opened_at):
+                raise ValueError("Invalid session opened_at")
         if self.phase in ("translating_recipe", "delivering", "done"):
             if type(self.selected_index) is not int or not 0 <= self.selected_index < len(self.recipes):
                 raise ValueError("Invalid selected recipe")
@@ -110,10 +102,10 @@ class State:
     sunday_leftovers_day: str = ""
     dashboard_pending: dict | None = None
     dashboard_updated_at: str = ""
-    version: int = field(default=9)
+    version: int = field(default=10)
 
     def __post_init__(self):
-        if self.version != 9:
+        if self.version != 10:
             raise ValueError("Unsupported state version")
         if self.week and not re.fullmatch(r"[0-9]{4}-W[0-9]{2}", self.week):
             raise ValueError("Invalid state week")
@@ -189,7 +181,10 @@ class StateStore:
             migrated = True
         if data.get("version") == 6 and set(data) == current_fields:
             if data["session"] is not None:
-                old_session_fields = {item.name for item in fields(Session)} - {
+                # window_minutes and deadline predate this dataclass; v9->v10 removes them again.
+                old_session_fields = ({item.name for item in fields(Session)} | {
+                    "window_minutes", "deadline",
+                }) - {
                     "translated_titles", "translated_ingredients", "translated_instructions",
                     "translation_attempts", "translation_retry_at", "translation_deadline",
                     "selected_automatic", "translation_fallback", "selected_title", "translation_model",
@@ -222,6 +217,19 @@ class StateStore:
                     raise ValueError("Incomplete or unsupported session")
                 data["session"].pop("translation_model", None)
             data["version"] = 9
+            migrated = True
+        if data.get("version") == 9 and set(data) == current_fields:
+            if data["session"] is not None:
+                if not isinstance(data["session"], dict):
+                    raise ValueError("Incomplete or unsupported session")
+                for name in ("window_minutes", "deadline", "selected_automatic"):
+                    data["session"].pop(name, None)
+            pending = data.get("dashboard_pending")
+            if pending is not None:
+                if not isinstance(pending, dict) or not isinstance(pending.get("payload"), dict):
+                    raise ValueError("Incomplete or unsupported dashboard update")
+                pending["payload"].pop("automatic", None)
+            data["version"] = 10
             migrated = True
         if set(data) != current_fields:
             raise ValueError("Incomplete or unsupported state file")

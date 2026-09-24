@@ -368,17 +368,19 @@ class TranslationConfigTests(unittest.TestCase):
     def test_v6_session_migration_preserves_outbox_and_rejects_partial_state(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
-            session = Session("2026-09-07", [recipe()], False, "!bot", "de", 60, ["menu"])
+            session = Session("2026-09-07", [recipe()], False, "!bot", "de", ["menu"])
             legacy = asdict(State(session=session))
+            legacy["session"]["window_minutes"] = 60
+            legacy["session"]["deadline"] = None
             legacy["version"] = 6
             del legacy["session"]["recipes"][0]["metric_ingredients"]
             for field in ("translated_titles", "translated_ingredients", "translated_instructions",
                           "translation_attempts", "translation_retry_at", "translation_deadline",
-                          "selected_automatic", "translation_fallback", "selected_title"):
+                          "translation_fallback", "selected_title"):
                 del legacy["session"][field]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 9)
+            self.assertEqual(state.version, 10)
             self.assertEqual(state.session.outbox, ["menu"])
             self.assertEqual(state.session.phase, "announcing")
             legacy["session"].pop("photo_skipped")

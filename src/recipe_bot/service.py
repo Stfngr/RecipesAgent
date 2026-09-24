@@ -8,7 +8,8 @@ import time
 from .api import APIError, Spoonacular, Telegram
 from .config import Settings, WEEKDAYS
 from .dashboard import Dashboard, selection_update
-from .recipes import Recipe, details, is_resend_command, is_skip_command, parse_selection, skipped, summary
+from .recipes import (Recipe, details, is_resend_command, is_restart_command, is_skip_command,
+                      parse_selection, skipped, summary)
 from .state import Session, StateStore
 from .translation import metric_temperatures
 
@@ -66,8 +67,6 @@ class RecipeService:
         async with self.lock:
             self.reset_week()
             session = self.state.session
-            if session and session.phase == "active" and self.clock() >= session.deadline:
-                self.resolve(self.rng.randrange(len(session.recipes)), automatic=True)
             if self.clock() < self.retry_at:
                 return
             if session and session.phase in ("announcing", "translating_recipe", "delivering", "skipping"):
@@ -119,9 +118,8 @@ class RecipeService:
         self.state.session = Session(
             day=now.date().isoformat(), recipes=recipes, dessert=dessert,
             trigger=self.settings.trigger_codeword, language=self.settings.interaction_language,
-            window_minutes=self.settings.active_window_minutes,
             outbox=summary(recipes, dessert, self.settings.interaction_language,
-                           self.settings.trigger_codeword, self.settings.active_window_minutes),
+                           self.settings.trigger_codeword),
             phase="translating_menu" if self.translator else "announcing",
             translation_deadline=(self.clock() + self.settings.translation_job_timeout_minutes * 60
                                   if self.translator else 0),
@@ -172,19 +170,17 @@ class RecipeService:
             return
         if session.phase == "announcing":
             session.opened_at = self.clock()
-            session.deadline = session.opened_at + session.window_minutes * 60
             session.phase = "active"
-            log.info("Selection window active")
+            log.info("Selection active")
         else:
             session.phase = "done" if session.phase == "delivering" else "skipped"
             log.info("%s; session inactive", "Recipe delivered" if session.phase == "done" else "Selection skipped")
         self.store.save(self.state)
 
-    def resolve(self, index: int, automatic: bool):
+    def resolve(self, index: int):
         session = self.state.session
         recipe = session.recipes[index]
         session.selected_index = index
-        session.selected_automatic = automatic
         if len(session.translated_titles) == len(session.recipes):
             session.selected_title = session.translated_titles[index]
         session.translation_attempts = 0
@@ -202,7 +198,7 @@ class RecipeService:
             self.dashboard_changed.set()
         if session.phase == "translating_recipe":
             self.translation_changed.set()
-        log.info("%s selection: recipe %s", "Timeout" if automatic else "User", recipe.id)
+        log.info("User selection: recipe %s", recipe.id)
 
     def selected_recipe(self, session: Session) -> Recipe:
         recipe = session.recipes[session.selected_index]
@@ -214,15 +210,14 @@ class RecipeService:
 
     def prepare_selected(self, session: Session, recipe: Recipe, fallback=False):
         session.phase = "delivering"
-        session.outbox = details(recipe, session.language, session.selected_automatic)
+        session.outbox = details(recipe, session.language)
         if fallback:
             message = ("Übersetzung derzeit nicht verfügbar. Hier ist das englische Original."
                        if session.language == "de" else "Translation unavailable. English original follows.")
             session.outbox = [message, *session.outbox]
         session.next_message = 0
         if self.dashboard:
-            update = selection_update(recipe, session.day, session.selected_automatic, self.clock(),
-                                      self.state.dashboard_updated_at)
+            update = selection_update(recipe, session.day, self.clock(), self.state.dashboard_updated_at)
             self.state.dashboard_pending = update
             self.state.dashboard_updated_at = update["updated_at"]
 
@@ -234,8 +229,7 @@ class RecipeService:
             else:
                 menu = [replace(recipe, title=title) for recipe, title in
                         zip(session.recipes, session.translated_titles)]
-            session.outbox = summary(menu, session.dessert, session.language,
-                                     session.trigger, session.window_minutes)
+            session.outbox = summary(menu, session.dessert, session.language, session.trigger)
             if fallback and self.translator:
                 message = ("Übersetzung derzeit nicht verfügbar. Rezepttitel bleiben Englisch."
                            if session.language == "de" else "Translation unavailable. Recipe titles remain English.")
@@ -355,6 +349,28 @@ class RecipeService:
         self.store.save(self.state)
         log.info("User skipped selection")
 
+    def restart(self, session: Session):
+        if len(session.translated_titles) == len(session.recipes):
+            menu = [replace(recipe, title=title) for recipe, title in
+                    zip(session.recipes, session.translated_titles)]
+        else:
+            menu = session.recipes
+        session.phase = "announcing"
+        session.selected_index = None
+        session.selected_title = ""
+        session.translated_ingredients = []
+        session.translated_instructions = []
+        session.translation_fallback = False
+        session.translation_attempts = 0
+        session.translation_retry_at = 0
+        session.translation_deadline = 0
+        session.photo_delivered = False
+        session.photo_skipped = False
+        session.outbox = summary(menu, session.dessert, session.language, session.trigger)
+        session.next_message = 0
+        self.store.save(self.state)
+        log.info("User restarted selection")
+
     def resend_menu(self, session: Session):
         photo_session = session if session.phase in ("delivering", "done") else None
         self.enqueue_resend(list(session.outbox), photo_session)
@@ -424,21 +440,24 @@ class RecipeService:
                 else:
                     self.notify_no_menu()
                 return
+            if is_restart_command(text, trigger):
+                if (session and session.day == self.local_now().date().isoformat()
+                        and session.phase in ("translating_recipe", "delivering", "skipping",
+                                              "done", "skipped")):
+                    self.restart(session)
+                return
             if not session or session.phase != "active":
                 return
-            if self.clock() >= session.deadline:
-                self.resolve(self.rng.randrange(len(session.recipes)), automatic=True)
-                return
-            # Telegram dates have one-second precision. Reject queued commands from older sessions.
+            # Telegram dates have one-second precision. Reject queued commands from before this window opened.
             sent_at = message.get("date", 0)
-            if not int(session.opened_at) <= sent_at < session.deadline:
+            if sent_at < int(session.opened_at):
                 return
             if is_skip_command(text, session.trigger):
                 self.skip()
                 return
             index = parse_selection(text, session.trigger, len(session.recipes))
             if index is not None:
-                self.resolve(index, automatic=False)
+                self.resolve(index)
 
     async def scheduler(self):
         while True:

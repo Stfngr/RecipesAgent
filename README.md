@@ -53,9 +53,10 @@ zu einem Container mit demselben Telegram-Token ausführen.
 
 ## Konfiguration
 
-`settings.json.example` definiert 1-100 Rezepte, 1-1439 aktive Minuten, 0-7
-Desserttage, `vegetarian_days`, Startzeit, IANA-Zeitzone und
-`interaction_language`. `additional_include_tags` ergänzt die an Spoonacular
+`settings.json.example` definiert 1-100 Rezepte, 0-7 Desserttage,
+`vegetarian_days`, Startzeit, IANA-Zeitzone und `interaction_language`. Die
+Auswahl bleibt zeitlich unbegrenzt aktiv, bis eine Nummer, `0` oder `restart`
+gesendet wird. `additional_include_tags` ergänzt die an Spoonacular
 gesendeten `include-tags` (z. B. `["italian"]`) um weitere Spoonacular-Tags in
 Kleinschreibung; Standard ist eine leere Liste. `language` muss `en` sein. Mit
 `sunday_leftovers=true` sind höchstens sechs Desserttage zulässig.
@@ -74,6 +75,11 @@ Englisch.** `interaction_language` steuert weiterhin feste Bot-Nachrichten.
 Auslasszustand erneut. Es ruft Spoonacular nicht auf. Versandfehler blockieren
 Auswahlbefehle nicht; bis zu 32 erneute Sendungen warten im Speicher und gehen
 bei einem Neustart verloren.
+
+`<trigger_codeword> restart` verwirft eine bereits getroffene Auswahl oder ein
+Auslassen und sendet dieselbe Tagesliste erneut zur erneuten Auswahl. Es ruft
+Spoonacular nicht auf und funktioniert nur für die heutige Auswahl, solange
+sie bereits getroffen, in Übersetzung oder ausgelassen wurde.
 
 ## Telegram einrichten
 
@@ -440,8 +446,9 @@ state file. Do not run local and container instances with the same token.
 
 ## Configuration
 
-`settings.json.example` defines recipe count, active window, dessert quota,
-vegetarian days, start time, timezone, and interaction language.
+`settings.json.example` defines recipe count, dessert quota, vegetarian days,
+start time, timezone, and interaction language. Selection stays open
+indefinitely until a number, `0`, or `restart` is sent.
 `additional_include_tags` appends extra lowercase Spoonacular tags (e.g.
 `["italian"]`) to the `include-tags` sent to Spoonacular; it defaults to an
 empty list. `language` must be `en`; `sunday_leftovers=true` permits at most
@@ -451,6 +458,11 @@ means **no translation requests or delay** and English recipe content.
 Translation settings in `settings.json` default to German, three attempts per
 batch, 30 seconds per translation request, and 15 minutes per job. Existing
 explicit settings are not overridden by new defaults.
+
+`<trigger_codeword> restart` discards an already made selection or skip and
+resends today's same recipe list for a new pick. It does not call
+Spoonacular and only works once today's selection has been made, is
+translating, or was skipped.
 
 ## Telegram Setup
 

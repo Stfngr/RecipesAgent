@@ -140,26 +140,22 @@ def split_message(text: str) -> list[str]:
     return chunks
 
 
-def summary(recipes: list[Recipe], dessert: bool, language: str, trigger: str, minutes: int) -> list[str]:
+def summary(recipes: list[Recipe], dessert: bool, language: str, trigger: str) -> list[str]:
     de = language == "de"
     heading = "Heutige Rezeptauswahl:" if de else "Today's recipes:"
     status = "😊" if dessert else "☹️"
     dessert_label = "Dessert heute" if de else "Dessert today"
     hint = (
-        f"Auswahl: {trigger} <Nummer>\n{trigger} 0 fuer keine Auswahl "
-        f"(aktiv fuer {minutes} Minuten)"
-        if de else f"Select: {trigger} <number>\n{trigger} 0 for no selection "
-        f"(active for {minutes} minutes)"
+        f"Auswahl: {trigger} <Nummer>\n{trigger} 0 fuer keine Auswahl"
+        if de else f"Select: {trigger} <number>\n{trigger} 0 for no selection"
     )
     titles = [f"{index}. {' '.join(recipe.title.split())}" for index, recipe in enumerate(recipes, 1)]
     return split_message("\n".join([heading, "", *titles, "", f"{dessert_label}: {status}", "", hint]))
 
 
-def details(recipe: Recipe, language: str, automatic: bool) -> list[str]:
+def details(recipe: Recipe, language: str) -> list[str]:
     de = language == "de"
-    heading = ("Automatische Auswahl" if automatic else "Ausgewaehltes Rezept") if de else (
-        "Automatic selection" if automatic else "Selected recipe"
-    )
+    heading = "Ausgewaehltes Rezept" if de else "Selected recipe"
     lines = [f"{heading}: {recipe.title}"]
     for label, value in (
         ("Portionen" if de else "Servings", recipe.servings),
@@ -200,3 +196,7 @@ def is_skip_command(text: str, trigger: str) -> bool:
 
 def is_resend_command(text: str, trigger: str) -> bool:
     return text == f"{trigger} resend"
+
+
+def is_restart_command(text: str, trigger: str) -> bool:
+    return text == f"{trigger} restart"

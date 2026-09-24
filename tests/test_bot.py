@@ -14,7 +14,8 @@ import httpx
 from recipe_bot.api import APIError, Spoonacular, Telegram
 from recipe_bot.__main__ import TEST_MESSAGE, main, send_test_message
 from recipe_bot.config import Credentials, Settings, load_config
-from recipe_bot.recipes import Recipe, details, is_resend_command, is_skip_command, parse_selection, plain_text, skipped, split_message, summary
+from recipe_bot.recipes import (Recipe, details, is_resend_command, is_restart_command, is_skip_command,
+                                parse_selection, plain_text, skipped, split_message, summary)
 from recipe_bot.service import RecipeService
 from recipe_bot.state import Session, State, StateStore, week_key
 
@@ -170,7 +171,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.state.session.phase, "active")
 
     async def test_resend_failure_does_not_block_next_selection(self):
-        self.settings = Settings(recipes_per_day=2, active_window_minutes=1)
+        self.settings = Settings(recipes_per_day=2)
         self.service = self.build()
         await self.service.tick()
         sleeping = asyncio.Event()
@@ -254,11 +255,10 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.tick()
         self.assertEqual(self.telegram.send.await_count, 2)
 
-    async def test_deadline_resolves_during_delivery_cooldown(self):
+    async def test_selection_resolves_during_delivery_cooldown(self):
         await self.service.tick()
-        self.service.retry_at = self.service.state.session.deadline + 90
-        self.now = self.service.state.session.deadline
-        await self.service.tick()
+        self.service.retry_at = self.now + 90
+        await self.service.handle_update(self.update("!bot 1"))
         self.assertEqual(self.store.load().session.phase, "delivering")
 
     async def test_resend_retry_keeps_completed_message_cursor(self):
@@ -381,36 +381,60 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                              self.service.handle_update(self.update("!bot 2")))
         self.assertEqual(self.service.state.session.selected_index, 0)
 
-    async def test_timeout_at_deadline_and_restart(self):
+    async def test_no_automatic_timeout_stays_active_indefinitely(self):
         await self.service.tick()
-        deadline = self.service.state.session.deadline
-        self.now += 10
+        self.now += 100000
         self.service = self.build()
         await self.service.tick()
-        self.assertEqual(self.service.state.session.deadline, deadline)
-        self.now = deadline
-        self.service = self.build()
+        self.assertEqual(self.service.state.session.phase, "active")
+        self.assertEqual(len(self.telegram.messages), 1)
+        self.assertEqual(len(self.api.filters), 1)
+        await self.service.handle_update(self.update("!bot 1"))
+        self.assertEqual(self.service.state.session.selected_index, 0)
+
+    async def test_restart_command_resends_menu_for_new_selection(self):
+        await self.service.tick()
+        await self.service.handle_update(self.update("!bot 1"))
         await self.service.tick()
         self.assertEqual(self.service.state.session.phase, "done")
-        self.assertIn("Automatische Auswahl", self.telegram.messages[-1])
+        self.assertEqual(self.service.state.session.selected_index, 0)
+        await self.service.handle_update(self.update("!bot restart"))
+        self.assertEqual(self.service.state.session.phase, "announcing")
+        self.assertIsNone(self.service.state.session.selected_index)
+        await self.service.tick()
+        self.assertEqual(self.service.state.session.phase, "active")
+        self.assertEqual(self.telegram.messages[-1], self.telegram.messages[0])
+        await self.service.handle_update(self.update("!bot 2"))
+        self.assertEqual(self.service.state.session.selected_index, 1)
+        await self.service.tick()
+        self.assertEqual(self.service.state.session.phase, "done")
+        self.assertIn("Recipe 2", self.telegram.messages[-1])
         self.assertEqual(len(self.api.filters), 1)
 
-    async def test_resend_after_timeout_preserves_automatic_selection(self):
+    async def test_restart_after_skip_allows_new_selection(self):
         await self.service.tick()
-        self.now = self.service.state.session.deadline
+        await self.service.handle_update(self.update("!bot 0"))
         await self.service.tick()
-        selected_messages = self.telegram.messages[1:].copy()
-        await self.resend()
-        self.assertEqual(self.telegram.messages[-len(selected_messages):], selected_messages)
-        self.assertIn("Automatische Auswahl", self.telegram.messages[-1])
-        self.assertEqual(self.service.state.session.phase, "done")
+        self.assertEqual(self.service.state.session.phase, "skipped")
+        await self.service.handle_update(self.update("!bot restart"))
+        await self.service.tick()
+        self.assertEqual(self.service.state.session.phase, "active")
+        await self.service.handle_update(self.update("!bot 1"))
+        self.assertEqual(self.service.state.session.selected_index, 0)
 
-    async def test_late_command_cannot_win_race_with_timeout(self):
+    async def test_restart_command_ignored_when_nothing_to_restart(self):
         await self.service.tick()
-        self.now = self.service.state.session.deadline
-        await self.service.handle_update(self.update())
-        self.assertEqual(self.service.state.session.phase, "delivering")
-        self.assertIn("Automatische Auswahl", self.service.state.session.outbox[0])
+        await self.service.handle_update(self.update("!bot restart"))
+        self.assertEqual(self.service.state.session.phase, "active")
+        self.assertIsNone(self.service.state.session.selected_index)
+
+    async def test_restart_command_ignored_for_old_menu(self):
+        await self.service.tick()
+        await self.service.handle_update(self.update("!bot 1"))
+        await self.service.tick()
+        self.now += 86400
+        await self.service.handle_update(self.update("!bot restart"))
+        self.assertEqual(self.service.state.session.phase, "done")
 
     async def test_fixed_vegetarian_day_includes_seafood(self):
         self.settings = Settings(recipes_per_day=2, vegetarian_days=["monday"])
@@ -472,7 +496,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.tick()
         self.assertEqual(len(self.api.filters), 1)
         self.assertEqual(self.service.state.dessert_days_used_this_week, 1)
-        self.assertEqual(self.service.state.session.deadline, self.now + 3600)
+        self.assertEqual(self.service.state.session.phase, "active")
 
     async def test_complete_week_uses_fixed_vegetarian_days(self):
         self.settings = Settings(recipes_per_day=2, vegetarian_days=["monday", "friday"])
@@ -514,6 +538,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.service = self.build()
         await self.service.tick()
         self.assertFalse(self.service.state.session.dessert)
+        await self.service.handle_update(self.update("!bot 0"))
+        await self.service.tick()
         self.now += 6 * 86400
         self.settings = Settings(recipes_per_day=2, dessert_days_per_week=2)
         self.service = self.build()
@@ -522,6 +548,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_old_week_recovery_does_not_charge_new_week(self):
         self.now += 6 * 86400
+        await self.service.tick()
+        await self.service.handle_update(self.update("!bot 0"))
         await self.service.tick()
         self.now += 86400
         await self.service.tick()
@@ -558,7 +586,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.api.filters), 1)
 
     async def test_dst_repeated_hour_does_not_duplicate_menu(self):
-        self.settings = Settings(start_time="02:30", active_window_minutes=10, recipes_per_day=2)
+        self.settings = Settings(start_time="02:30", recipes_per_day=2)
         self.now = datetime(2026, 10, 25, 2, 30, tzinfo=self.settings.zone).timestamp()
         self.service = self.build()
         await self.service.tick()
@@ -649,7 +677,7 @@ class UnitTests(unittest.TestCase):
 
     def test_config_validation(self):
         for kwargs in ({"recipes_per_day": 0}, {"recipes_per_day": True},
-                        {"start_time": "8:00"}, {"active_window_minutes": 0},
+                        {"start_time": "8:00"},
                         {"vegetarian_days": ["monday", "monday"]},
                         {"vegetarian_days": ["Monday"]}, {"vegetarian_days": ["holiday"]},
                         {"vegetarian_days": "monday"}, {"dessert_days_per_week": -1},
@@ -705,7 +733,7 @@ class UnitTests(unittest.TestCase):
                        "fetch_attempts": 0, "fetch_retry_at": 0, "version": 1}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = store.load()
-            self.assertEqual(state.version, 9)
+            self.assertEqual(state.version, 10)
             self.assertEqual(state.dessert_days_used_this_week, 1)
             self.assertNotIn("meat_recipes_chosen_this_week", json.loads(path.read_text(encoding="utf-8")))
 
@@ -716,14 +744,16 @@ class UnitTests(unittest.TestCase):
                       "fetch_day": "", "fetch_attempts": 0, "fetch_retry_at": 0, "version": 2}
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 9)
+            self.assertEqual(state.version, 10)
             self.assertEqual(state.sunday_leftovers_day, "")
 
     def test_version_three_session_migrates_photo_delivery_state(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
-            session = Session("2026-09-07", [recipe()], False, "!bot", "de", 60, ["menu"])
+            session = Session("2026-09-07", [recipe()], False, "!bot", "de", ["menu"])
             legacy = asdict(State(session=session))
+            legacy["session"]["window_minutes"] = 60
+            legacy["session"]["deadline"] = None
             legacy["version"] = 3
             del legacy["dashboard_pending"]
             del legacy["dashboard_updated_at"]
@@ -732,19 +762,21 @@ class UnitTests(unittest.TestCase):
             del legacy["session"]["recipes"][0]["metric_ingredients"]
             for name in ("translated_titles", "translated_ingredients", "translated_instructions",
                          "translation_attempts", "translation_retry_at", "translation_deadline",
-                         "selected_automatic", "translation_fallback", "selected_title"):
+                         "translation_fallback", "selected_title"):
                 del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 9)
+            self.assertEqual(state.version, 10)
             self.assertFalse(state.session.photo_delivered)
             self.assertFalse(state.session.photo_skipped)
 
     def test_version_four_session_migrates_photo_skip_state(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
-            session = Session("2026-09-07", [recipe()], False, "!bot", "de", 60, ["menu"])
+            session = Session("2026-09-07", [recipe()], False, "!bot", "de", ["menu"])
             legacy = asdict(State(session=session))
+            legacy["session"]["window_minutes"] = 60
+            legacy["session"]["deadline"] = None
             legacy["version"] = 4
             del legacy["dashboard_pending"]
             del legacy["dashboard_updated_at"]
@@ -752,42 +784,47 @@ class UnitTests(unittest.TestCase):
             del legacy["session"]["recipes"][0]["metric_ingredients"]
             for name in ("translated_titles", "translated_ingredients", "translated_instructions",
                          "translation_attempts", "translation_retry_at", "translation_deadline",
-                         "selected_automatic", "translation_fallback", "selected_title"):
+                         "translation_fallback", "selected_title"):
                 del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 9)
+            self.assertEqual(state.version, 10)
             self.assertFalse(state.session.photo_skipped)
 
     def test_version_six_session_migrates_through_v8(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
-            session = Session("2026-09-07", [recipe()], False, "!bot", "de", 60, ["menu"])
+            session = Session("2026-09-07", [recipe()], False, "!bot", "de", ["menu"])
             legacy = asdict(State(session=session))
+            legacy["session"]["window_minutes"] = 60
+            legacy["session"]["deadline"] = None
             legacy["version"] = 6
             del legacy["session"]["recipes"][0]["metric_ingredients"]
             for name in ("translated_titles", "translated_ingredients", "translated_instructions",
                          "translation_attempts", "translation_retry_at", "translation_deadline",
-                         "selected_automatic", "translation_fallback", "selected_title"):
+                         "translation_fallback", "selected_title"):
                 del legacy["session"][name]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             state = StateStore(path).load()
-            self.assertEqual(state.version, 9)
+            self.assertEqual(state.version, 10)
             self.assertEqual(state.session.outbox, ["menu"])
             self.assertEqual(state.session.recipes[0].metric_ingredients, [])
+            rewritten = json.loads(path.read_text(encoding="utf-8"))
+            for name in ("window_minutes", "deadline", "selected_automatic"):
+                self.assertNotIn(name, rewritten["session"])
 
     def test_version_seven_recipes_migrate_and_persist(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
             original = recipe()
-            session = Session("2026-09-07", [original], False, "!bot", "en", 60, ["menu"])
+            session = Session("2026-09-07", [original], False, "!bot", "en", ["menu"])
             legacy = asdict(State(session=session))
             legacy["version"] = 7
             del legacy["session"]["recipes"][0]["metric_ingredients"]
             path.write_text(json.dumps(legacy), encoding="utf-8")
             store = StateStore(path)
             migrated = store.load()
-            self.assertEqual(migrated.version, 9)
+            self.assertEqual(migrated.version, 10)
             self.assertEqual(migrated.session.recipes[0].ingredients, ["100 g rice"])
             self.assertEqual(migrated.session.recipes[0].metric_ingredients, [])
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["session"]["recipes"][0]
@@ -797,7 +834,7 @@ class UnitTests(unittest.TestCase):
     def test_invalid_v7_recipe_does_not_rewrite_state(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
-            session = Session("2026-09-07", [recipe()], False, "!bot", "en", 60, ["menu"])
+            session = Session("2026-09-07", [recipe()], False, "!bot", "en", ["menu"])
             legacy = asdict(State(session=session))
             legacy["version"] = 7
             legacy["session"]["recipes"][0]["metric_ingredients"] = ["100 g rice"]
@@ -816,7 +853,7 @@ class UnitTests(unittest.TestCase):
                     "metric": {"amount": 300, "unitShort": "g"}}}],
                 "instructions": "Cook.",
             })
-            session = Session("2026-09-07", [converted], False, "!bot", "en", 60, ["menu"])
+            session = Session("2026-09-07", [converted], False, "!bot", "en", ["menu"])
             store = StateStore(path)
             store.save(State(session=session))
             loaded = store.load().session.recipes[0]
@@ -829,7 +866,7 @@ class UnitTests(unittest.TestCase):
                 Recipe(1, "Rice", True, ["100 g rice"], ["Cook."], metric_ingredients=metric)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"
-            session = Session("2026-09-07", [recipe()], False, "!bot", "en", 60, ["menu"])
+            session = Session("2026-09-07", [recipe()], False, "!bot", "en", ["menu"])
             incomplete = asdict(State(session=session))
             del incomplete["session"]["recipes"][0]["metric_ingredients"]
             path.write_text(json.dumps(incomplete), encoding="utf-8")
@@ -859,7 +896,7 @@ class UnitTests(unittest.TestCase):
             "300 g finely chopped carrots", "120.5 ml of fresh milk",
             "30 ml extra virgin olive oil", "30 ml Dijon mustard", "1 onion, diced", "salt to taste",
         ])
-        self.assertIn("2 cups finely chopped carrots", details(result, "en", False)[0])
+        self.assertIn("2 cups finely chopped carrots", details(result, "en")[0])
 
     def test_untrusted_metric_values_fall_back_without_changing_english(self):
         cases = [
@@ -896,21 +933,21 @@ class UnitTests(unittest.TestCase):
         chunks = split_message("\U0001f600" * 5000)
         self.assertEqual("".join(chunks), "\U0001f600" * 5000)
         self.assertTrue(all(len(part.encode("utf-16-le")) // 2 <= 4096 for part in chunks))
-        self.assertEqual(summary([recipe()], False, "de", "!bot", 60), [
+        self.assertEqual(summary([recipe()], False, "de", "!bot"), [
             "Heutige Rezeptauswahl:\n\n"
             "1. Recipe 1\n\n"
             "Dessert heute: ☹️\n\n"
             "Auswahl: !bot <Nummer>\n"
-            "!bot 0 fuer keine Auswahl (aktiv fuer 60 Minuten)"
+            "!bot 0 fuer keine Auswahl"
         ])
-        self.assertEqual(summary([recipe()], True, "en", "!bot", 60), [
+        self.assertEqual(summary([recipe()], True, "en", "!bot"), [
             "Today's recipes:\n\n"
             "1. Recipe 1\n\n"
             "Dessert today: 😊\n\n"
             "Select: !bot <number>\n"
-            "!bot 0 for no selection (active for 60 minutes)"
+            "!bot 0 for no selection"
         ])
-        self.assertIn("Ingredients:", details(recipe(), "en", False)[0])
+        self.assertIn("Ingredients:", details(recipe(), "en")[0])
         self.assertEqual(skipped("en"), ["No selection for today. See you tomorrow."])
 
     def test_parser_literal_trigger(self):
@@ -923,6 +960,9 @@ class UnitTests(unittest.TestCase):
         self.assertTrue(is_resend_command("!b.t resend", "!b.t"))
         for text in ("!b.t resend ", "!b.t resend now", "!bat resend"):
             self.assertFalse(is_resend_command(text, "!b.t"))
+        self.assertTrue(is_restart_command("!b.t restart", "!b.t"))
+        for text in ("!b.t restart ", "!b.t restart now", "!bat restart"):
+            self.assertFalse(is_restart_command(text, "!b.t"))
 
     def test_credentials_not_in_repr(self):
         with tempfile.TemporaryDirectory() as directory:
