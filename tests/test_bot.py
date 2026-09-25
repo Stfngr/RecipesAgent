@@ -106,12 +106,12 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.tick()
         self.assertEqual(len(self.api.filters), 1)
 
-    async def test_recipe_failure_sends_safe_retry_alert(self):
+    async def test_recipe_failure_sends_final_alert(self):
         self.api.fail = APIError("Spoonacular", 500)
         with self.assertRaises(APIError):
             await self.service.tick()
         self.assertEqual(self.telegram.messages, [
-            "Rezeptabruf fehlgeschlagen (HTTP/API 500). Neuer Versuch in mindestens 5 Minuten."
+            "Rezeptabruf fehlgeschlagen (HTTP/API 500). Keine weiteren Versuche heute."
         ])
 
     async def test_exhausted_recipe_budget_sends_final_alert(self):
@@ -127,7 +127,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.service = self.build()
         await self.service.notify_fetch_failure(APIError("Spoonacular", 500))
         self.assertEqual(self.telegram.messages[-1],
-                         "Spoonacular request failed (HTTP/API 500). Retrying in at least 5 minutes.")
+                         "Spoonacular request failed (HTTP/API 500). No more attempts today.")
         self.now = datetime(2026, 9, 13, 8, tzinfo=ZoneInfo("Europe/Berlin")).timestamp()
         await self.service.tick()
         self.assertEqual(self.telegram.messages[-1],
@@ -557,13 +557,12 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fetch_budget_persists_across_restart(self):
         self.api.fail = APIError("Spoonacular", 500)
-        for _ in range(3):
-            with self.assertRaises(APIError):
-                await self.service.tick()
-            self.service = self.build()
-            self.now += 300
+        with self.assertRaises(APIError):
+            await self.service.tick()
+        self.service = self.build()
+        self.now += 300
         await self.service.tick()
-        self.assertEqual(len(self.api.filters), 3)
+        self.assertEqual(len(self.api.filters), 1)
         self.assertIsNone(self.service.state.session)
         self.assertEqual(self.service.state.dessert_days_used_this_week, 0)
 

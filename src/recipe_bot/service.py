@@ -86,12 +86,10 @@ class RecipeService:
         if self.state.fetch_day != day:
             self.state.fetch_day = day
             self.state.fetch_attempts = 0
-            self.state.fetch_retry_at = 0
-        if self.state.fetch_attempts >= 3 or self.clock() < self.state.fetch_retry_at:
+        if self.state.fetch_attempts >= 1:
             return
-        # Persist the budget before each paid request, including across process restarts.
+        # Persist the budget before the paid request, including across process restarts.
         self.state.fetch_attempts += 1
-        self.state.fetch_retry_at = self.clock() + 300
         self.store.save(self.state)
         vegetarian_only = WEEKDAYS[date.fromisoformat(day).weekday()] in self.settings.vegetarian_days
         try:
@@ -99,13 +97,8 @@ class RecipeService:
                 self.settings.recipes_per_day, vegetarian_only, self.settings.additional_include_tags
             )
         except APIError as error:
-            self.state.fetch_retry_at = self.clock() + max(300, error.retry_after)
-            if error.status in (401, 402, 403):
-                self.state.fetch_attempts = 3
-            self.store.save(self.state)
             await self.notify_fetch_failure(error)
-            if self.state.fetch_attempts == 3:
-                log.error("Daily recipe request budget exhausted; skipping today")
+            log.error("Daily recipe request budget exhausted; skipping today")
             raise
         self.reset_week()
         now = self.local_now()
@@ -131,11 +124,10 @@ class RecipeService:
         log.info("Daily session created: %s", self.state.session.day)
 
     async def notify_fetch_failure(self, error: APIError):
-        exhausted = self.state.fetch_attempts == 3
         if self.settings.interaction_language == "de":
-            outcome = "Keine weiteren Versuche heute." if exhausted else "Neuer Versuch in mindestens 5 Minuten."
+            outcome = "Keine weiteren Versuche heute."
         else:
-            outcome = "No more attempts today." if exhausted else "Retrying in at least 5 minutes."
+            outcome = "No more attempts today."
         alert = (f"Rezeptabruf fehlgeschlagen" + (f" (HTTP/API {error.status})" if error.status else "")
                  if self.settings.interaction_language == "de" else str(error))
         try:
