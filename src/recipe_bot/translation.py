@@ -24,7 +24,7 @@ class LibreTranslateTranslator:
     async def translate(self, texts: list[str]) -> list[str]:
         data = await request_json(
             self.client, "POST", self.url, "LibreTranslate",
-            json={"q": texts, "source": "en", "target": self.target, "format": "text"},
+            json={"q": texts, "source": "auto", "target": self.target, "format": "text"},
             timeout=httpx.Timeout(self.timeout, connect=10),
         )
         translations = data.get("translatedText")
