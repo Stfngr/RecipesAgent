@@ -25,7 +25,7 @@ class TranslatorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(str(request.url), "http://libretranslate:5000/translate")
             payload = json.loads(request.content)
             self.assertEqual(payload, {
-                "q": ["Rice", "100 g rice"], "source": "en", "target": "de", "format": "text"
+                "q": ["Rice", "100 g rice"], "source": "auto", "target": "de", "format": "text"
             })
             return httpx.Response(200, json={"translatedText": ["Reis", "100 g Reis"]})
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
